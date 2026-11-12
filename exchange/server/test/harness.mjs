@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { KeyPair } from 'near-api-js';
 import { loadConfig } from '../config.mjs';
+import { HEALTHY_REFUSAL } from '../actors.mjs';
 import { Coordinator } from '../coordinator.mjs';
 import { MemoryStore } from '../store.mjs';
 import { CODE_HASH, FINGERPRINTS, IDS, MARKET_DEPLOY_KEY, MockChain } from './mock-chain.mjs';
@@ -30,7 +31,7 @@ export function harness({ env = {}, chain = new MockChain(), store = new MemoryS
     },
     async liquidate(session) {
       actorCalls.push({ command: 'liquidate', market: session.market_id });
-      throw new Error('position is healthy at this oracle round (equity is at least 5% maintenance)');
+      throw new Error('error: ' + HEALTHY_REFUSAL);
     },
   };
   const coordinator = new Coordinator({

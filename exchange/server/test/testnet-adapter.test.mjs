@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { KeyPair } from 'near-api-js';
-import { createTestnetAdapter } from '../testnet.mjs';
+import { createTestnetAdapter, isMissingAccount } from '../testnet.mjs';
 
 const ROOT = 'xythum-perps-demo.testnet';
 const ROLES = ['DEMO', 'MARKET', 'TOKEN', 'TRADER', 'MAKER', 'ORACLE', 'KEEPER_A', 'KEEPER_B'];
@@ -96,6 +96,32 @@ test('testnet adapter refuses the existing market and role accounts', async () =
     { public_key: 'ed25519:k', permission: 'FullAccess' }, { public_key: 'ed25519:f', permission: 'FunctionCall' },
   ]);
   assert.equal(await chain.finalHeight(), 42);
+});
+
+test('a fresh session account reported missing by near-api-js reads as absent; other errors throw', async () => {
+  const id = 'market-62fff129df71.' + ROOT;
+  // Exact error observed from the first real browser session (near-api-js 5.1.1 TypedError).
+  const observed = Object.assign(
+    new Error("Can't complete the action because account " + id + " doesn't exist"), { type: 'AccountDoesNotExist' });
+  assert.equal(isMissingAccount(observed, id), true);
+  assert.equal(isMissingAccount(new Error(observed.message), id), true);
+  assert.equal(isMissingAccount(Object.assign(new Error('Querying failed: ' + id), { type: 'UNKNOWN_ACCOUNT' }), id), true);
+  // Another account, an access key, or a transport failure is not this account's absence.
+  assert.equal(isMissingAccount(observed, 'market-other.' + ROOT), false);
+  assert.equal(isMissingAccount(new Error("Can't complete the action because access key ed25519:x doesn't exist"), id), false);
+  assert.equal(isMissingAccount(Object.assign(new Error('fetch failed'), { type: 'RetriesExceeded' }), id), false);
+
+  const f = fake();
+  const query = f.chain.provider.query;
+  let failure = observed;
+  f.chain.provider.query = async (request) => {
+    if (request.request_type === 'view_account' && request.account_id === id) throw failure;
+    return query(request);
+  };
+  const { chain } = await createTestnetAdapter({ ...f, finalize: async () => {} });
+  assert.equal(await chain.accountState(id), null);
+  failure = Object.assign(new Error('Exceeded 4 attempts for request to query.'), { type: 'RetriesExceeded' });
+  await assert.rejects(chain.accountState(id), /Exceeded 4 attempts/);
 });
 
 test('keeper secrets are split per actor and only Keeper B gets a transaction key', async () => {

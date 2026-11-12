@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { after, before, test } from 'node:test';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { createActors, isOwnerOnlySddl, runActor, securePrivateDir, WINDOWS_TOOLS } from '../actors.mjs';
+import { createActors, HEALTHY_REFUSAL, isOwnerOnlySddl, runActor, securePrivateDir, WINDOWS_TOOLS } from '../actors.mjs';
 import { createApp } from '../app.mjs';
 import { safeMessage } from '../util.mjs';
 import { KeeperWorker } from '../worker.mjs';
@@ -256,7 +256,7 @@ test('the background worker retries armed sessions on new rounds while the brows
     actors: {
       ack: async () => randomBytes(64).toString('base64'),
       async liquidate(session) {
-        if (!liquidatable) throw new Error('position is healthy at this oracle round');
+        if (!liquidatable) throw new Error('error: ' + HEALTHY_REFUSAL);
         w.chain.markets.get(session.market_id).active = null;
         return { tx: { hash: 'WorkerLiquidation' } };
       },

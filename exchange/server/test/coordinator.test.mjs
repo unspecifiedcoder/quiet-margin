@@ -2,9 +2,10 @@ import assert from 'node:assert/strict';
 import { createHash, randomBytes } from 'node:crypto';
 import { test } from 'node:test';
 import { positionContext } from '../../../tests/actor.mjs';
+import { HEALTHY_REFUSAL, isHealthyRefusal } from '../actors.mjs';
 import { loadConfig, NEAR } from '../config.mjs';
 import {
-  bearerFromSignature, MAX_VIEW_RECEIPTS, parsePublicKey, sessionAccountIds, verifySessionProof,
+  bearerFromSignature, MAX_ROUND_ATTEMPTS, MAX_VIEW_RECEIPTS, parsePublicKey, sessionAccountIds, verifySessionProof,
 } from '../coordinator.mjs';
 import { MemoryStore } from '../store.mjs';
 import { HttpError } from '../util.mjs';
@@ -418,7 +419,7 @@ test('Keeper B arms for the active slot, skips healthy rounds without a transact
         if (pin?.expectedNonce !== active.nonce || pin?.expectedCommitment !== active.commitment) {
           throw new Error('position changed: nothing was proved, signed or sent');
         }
-        if (!liquidatable) throw new Error('position is healthy at this oracle round (equity is at least 5% maintenance)');
+        if (!liquidatable) throw new Error('error: ' + HEALTHY_REFUSAL);
         const market = h.chain.markets.get(session.market_id);
         market.active = null;
         market.ledger.keeper_available[1] += 100;
@@ -479,4 +480,63 @@ test('an armed slot settled by the trader is tracked as terminal', async () => {
   await h.coordinator.attemptKeeper(record);
   assert.equal(record.keeper.armed, false);
   assert.equal(record.keeper.settlement.outcome, 'settled');
+});
+
+test('only the exact prover healthy refusal counts as healthy', () => {
+  assert.equal(isHealthyRefusal(new Error(HEALTHY_REFUSAL)), true);
+  assert.equal(isHealthyRefusal(new Error('error: ' + HEALTHY_REFUSAL)), true);
+  for (const message of [
+    'position is healthy at this oracle round',
+    'position is below 5% maintenance at the opening mark; open cannot be proven',
+    'RPC unhealthy: 503', 'node not healthy', 'error: internal prover failure',
+  ]) assert.equal(isHealthyRefusal(new Error(message)), false, message);
+});
+
+test('Keeper B retries a round after transient failures, bounded, and skips it only when healthy', async () => {
+  let outcome = 'error';
+  const h = harness({
+    actors: {
+      ack: async () => randomBytes(64).toString('base64'),
+      async liquidate(session) {
+        h.actorCalls.push({ command: 'liquidate' });
+        if (outcome === 'error') throw new Error('[-32000] Server error: RPC timeout');
+        if (outcome === 'healthy') throw new Error('error: ' + HEALTHY_REFUSAL);
+        h.chain.markets.get(session.market_id).active = null;
+        return { tx: { hash: 'RetriedLiquidation' } };
+      },
+    },
+  });
+  const liquidations = () => h.actorCalls.filter(({ command }) => command === 'liquidate').length;
+  const { record } = await ready(h);
+  h.chain.open(record.market_id, stageQuote(h, record));
+  await h.coordinator.keeper(record, { armed: true });
+  const round = record.keeper.attempts[0].round;
+  assert.equal(record.keeper.attempts[0].outcome, 'error');
+  assert.equal(record.keeper.last_round, null);
+
+  // A transient failure on the same round is retried up to the bound, then given up.
+  for (let i = 1; i < MAX_ROUND_ATTEMPTS + 2; i += 1) await h.coordinator.attemptKeeper(record);
+  assert.equal(liquidations(), MAX_ROUND_ATTEMPTS);
+  assert.ok(record.keeper.attempts.every((a) => a.round === round && a.outcome === 'error'));
+  assert.equal(record.keeper.attempts.at(-1).exhausted, true);
+  assert.equal(record.keeper.last_round, round);
+
+  // A new round: a healthy refusal is skipped after one try.
+  await h.coordinator.mark(record, { price_ticks: 9_000 });
+  outcome = 'healthy';
+  await h.coordinator.attemptKeeper(record);
+  await h.coordinator.attemptKeeper(record);
+  assert.equal(liquidations(), MAX_ROUND_ATTEMPTS + 1);
+  assert.equal(record.keeper.attempts.at(-1).outcome, 'healthy');
+
+  // A distressed round that first fails transiently is liquidated on the retry.
+  await h.coordinator.mark(record, { price_ticks: 5_200 });
+  outcome = 'error';
+  await h.coordinator.attemptKeeper(record);
+  assert.equal(record.keeper.armed, true);
+  outcome = 'liquidated';
+  const { receipt } = await h.coordinator.attemptKeeper(record);
+  assert.deepEqual(receipt, { label: 'liquidation_1', hash: 'RetriedLiquidation' });
+  assert.equal(record.keeper.settlement.outcome, 'liquidated');
+  assert.equal(liquidations(), MAX_ROUND_ATTEMPTS + 3);
 });

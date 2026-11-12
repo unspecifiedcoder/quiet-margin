@@ -170,4 +170,10 @@ export function createActors({
   };
 }
 
-export const isHealthyRefusal = (error) => /healthy|maintenance/i.test(error?.message ?? '');
+// Exact text of the prover's ModelError::Healthy (prover/src/model.rs). The
+// prover prints it as "error: <msg>" and the actor relays that final line.
+// Anything else (RPC, prover crash, timeout) is a transient error, not a skip.
+export const HEALTHY_REFUSAL =
+  'position is healthy at this oracle round (equity is at least 5% maintenance); liquidation cannot be proven';
+export const isHealthyRefusal = (error) =>
+  String(error?.message ?? '').trim().replace(/^error: /, '') === HEALTHY_REFUSAL;

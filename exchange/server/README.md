@@ -117,8 +117,11 @@ Errors are `{error, message}` with a 4xx or 5xx status. Rate limits answer
   a per-session minimum interval, and a per-session count.
 - **Keeper.** Arming requires an active slot and pins its nonce and
   commitment. The first attempt runs inline. After that, a background
-  worker tries once for each distinct oracle round, whether or not the
-  browser is still connected. Keeper B runs as a cold `tests/actor.mjs`
+  worker tries each distinct oracle round, whether or not the browser is
+  still connected. A round is finished when it is liquidated, when the
+  prover refuses it with its exact healthy-position message, or after
+  `MAX_ROUND_ATTEMPTS` (3) transient prover/RPC failures; until then the
+  worker retries the same round while the pinned slot is still active. Keeper B runs as a cold `tests/actor.mjs`
   process with a temporary keeper file (its encryption key and transaction
   key only) and the public proving key. It is passed the armed slot's
   `expectedNonce` and `expectedCommitment`, so it refuses any other slot

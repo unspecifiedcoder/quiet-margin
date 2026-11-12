@@ -1,5 +1,6 @@
 // Background Keeper B watcher. Runs regardless of browser presence and tries
-// each armed session once per distinct oracle round, one prover at a time.
+// each armed session on each oracle round (with bounded retries of transient
+// failures, see Coordinator.attemptKeeper), one prover at a time.
 import { safeMessage } from './util.mjs';
 
 export class KeeperWorker {

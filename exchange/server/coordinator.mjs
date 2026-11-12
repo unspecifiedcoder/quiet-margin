@@ -14,6 +14,8 @@ const ONE_YOCTO = { attachedDeposit: 1n };
 const REGISTRATION_DEPOSIT = 10n ** 22n;
 const GAS_ALLOWANCE = NEAR / 10n;
 const MAX_ATTEMPTS_KEPT = 50;
+// Bounded tries of one oracle round after transient (non-healthy) failures.
+export const MAX_ROUND_ATTEMPTS = 3;
 // The client contract: a session view carries at most the latest 64 receipts.
 // The durable record keeps the full history.
 export const MAX_VIEW_RECEIPTS = 64;
@@ -601,7 +603,7 @@ export class Coordinator {
       if (!(current?.armed && current.nonce === active.nonce && current.commitment === active.commitment)) {
         record.keeper = {
           armed: true, nonce: active.nonce, commitment: active.commitment,
-          armed_at: new Date(this.now()).toISOString(), last_round: null, attempts: [],
+          armed_at: new Date(this.now()).toISOString(), last_round: null, retry: null, attempts: [],
           liquidation: null, settlement: null,
         };
         await this.#save(record);
@@ -611,8 +613,9 @@ export class Coordinator {
     });
   }
 
-  // One cold Keeper B attempt per distinct oracle round for an armed slot.
-  // Healthy rounds are refused by the local prover before any transaction.
+  // Cold Keeper B attempts per distinct oracle round for an armed slot: one if
+  // the prover refuses it as healthy (before any transaction), up to
+  // MAX_ROUND_ATTEMPTS if it fails transiently. Re-arming resets the state.
   attemptKeeper(record) {
     return this.#serial.run('keeper:' + record.key, async () => {
       const keeper = record.keeper;
@@ -631,7 +634,10 @@ export class Coordinator {
       }
       const oracle = await this.#view(record.market_id, 'get_oracle');
       if (!oracle || (keeper.last_round !== null && oracle.round <= keeper.last_round)) return {};
-      keeper.last_round = oracle.round;
+      // A round is done only once it is liquidated, refused as healthy by the
+      // prover, or has failed MAX_ROUND_ATTEMPTS times. Transient prover/RPC
+      // errors leave it pending so a distressed round is not silently skipped.
+      const failures = keeper.retry?.round === oracle.round ? keeper.retry.failures : 0;
       const attempt = { round: oracle.round, price_ticks: oracle.price_ticks, at: new Date(this.now()).toISOString() };
       let receipt;
       try {
@@ -643,6 +649,8 @@ export class Coordinator {
         receipt = { label: 'liquidation_' + keeper.nonce, hash: result.tx.hash };
         record.receipts.push(receipt);
         keeper.liquidation = receipt;
+        keeper.last_round = oracle.round;
+        keeper.retry = null;
         if (await this.#view(record.market_id, 'get_active') === null) {
           keeper.armed = false;
           keeper.settlement = {
@@ -652,8 +660,24 @@ export class Coordinator {
           };
         }
       } catch (error) {
-        attempt.outcome = isHealthyRefusal(error) ? 'healthy' : 'error';
-        if (attempt.outcome === 'error') attempt.error = safeMessage(error, 160);
+        if (receipt) {
+          // Liquidation landed; only the follow-up view failed. Never retry it.
+          attempt.error = safeMessage(error, 160);
+        } else if (isHealthyRefusal(error)) {
+          attempt.outcome = 'healthy';
+          keeper.last_round = oracle.round;
+          keeper.retry = null;
+        } else {
+          attempt.outcome = 'error';
+          attempt.error = safeMessage(error, 160);
+          if (failures + 1 >= MAX_ROUND_ATTEMPTS) {
+            attempt.exhausted = true;
+            keeper.last_round = oracle.round;
+            keeper.retry = null;
+          } else {
+            keeper.retry = { round: oracle.round, failures: failures + 1 };
+          }
+        }
       }
       keeper.attempts = [...keeper.attempts, attempt].slice(-MAX_ATTEMPTS_KEPT);
       await this.#save(record);
