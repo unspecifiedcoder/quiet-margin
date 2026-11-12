@@ -1,24 +1,29 @@
 // Xythum NEAR Perps — customer exchange UI.
 //
-// Layout and visual language are adapted from the original Xythum EVM DEX
+// Layout lineage: the original Xythum EVM DEX terminal
 // (Xythum-Labs/darkpool-gateway @ e5cbe25965ec546ac6e691704d9c176137cf561c):
-//   frontend/src/pages/Index.tsx            7/3 chart + trade terminal grid
-//   frontend/src/components/Header.tsx      brand lockup and network state
-//   frontend/src/components/TradingPanel.tsx account card, margin input, quote summary
-//   frontend/src/components/TabsSection.tsx positions / history tabs
-//   frontend/src/components/PositionRow.tsx position fields and close action
-//   frontend/src/components/ProofGenerationLoader.tsx proof progress messaging
-//   frontend/src/index.css                  HSL palette (navy, cyan, magenta)
-// React, wagmi, TradingView and wallet code were not carried over. This module
-// is plain DOM; it renders client state and forwards intents to handlers.
+// chart + activity on the left, a trade ticket on the right, positions /
+// history tabs below the chart. React, wagmi, TradingView and wallet code were
+// not carried over. This module is plain DOM; it renders client state and
+// forwards intents to handlers.
+//
+// Rendering rule: every interactive control is created once and only has its
+// text, disabled state and visibility updated. Lists (receipts, rounds,
+// position details) are rebuilt only when their visible content changes, so
+// the 8 s poll never steals focus from a button, link or input.
 
 import {
-  COLLATERAL, ESCROW_CENTS, MAKER_RESERVE_CENTS, MAX_LEVERAGE, MAX_LOTS, MAX_MARGIN_CENTS, MIN_LOTS, TICK_USD,
+  COLLATERAL, ESCROW_CENTS, KEEPER_BOUNTY_CENTS, MAKER_RESERVE_CENTS, MAX_LEVERAGE, MAX_LOTS, MAX_MARGIN_CENTS,
+  MIN_LOTS, TICK_USD,
   buildQuote, centsToString, formatAmount, formatBtc, formatCents, formatLeverage, formatPriceUsd, formatSigned,
   formatTicks, lotsToBtcString, normalizeState, parseCents, parseLots, parseMarkUsd, safeHttpUrl,
   shortHash,
 } from './format.js';
 import { createMarkChart } from './chart.js';
+
+/** Cold-start ticket: a valid 1.78x quote at a 100,000 USD mark that fits the fixed escrow. */
+const DEFAULT_SIZE = '0.008';
+const DEFAULT_MARGIN = '450.00';
 
 let uid = 0;
 
@@ -37,15 +42,21 @@ function h(tag, props = {}, ...kids) {
 
 const unit = (text = COLLATERAL) => h('span', { class: 'xc-unit', text });
 
-function stat(label, valueEl) {
-  return h('div', { class: 'xc-stat' }, h('span', { class: 'xc-stat__label', text: label }), valueEl);
-}
-
 function row(label, value, { tone, id } = {}) {
   return h('div', { class: 'xc-row' },
     h('dt', { text: label }),
     h('dd', { class: tone ? `is-${tone}` : null, id }, value));
 }
+
+function setText(el, text) {
+  const t = text ?? '';
+  if (el.textContent !== t) el.textContent = t;
+}
+
+const CUSTODY = {
+  'webcrypto-nonextractable': { short: 'Non-exportable browser key', long: 'The trader key is a non-extractable WebCrypto key in this browser. Pages on this site can ask it to sign, but cannot read it out.' },
+  'origin-storage': { short: 'Key in site storage', long: 'This browser lacks WebCrypto Ed25519, so the trader key is a secret kept in this site\'s storage. Clearing site data removes it.' },
+};
 
 export function mountExchange(root, handlers = {}) {
   if (!root) throw new Error('mountExchange: root element required');
@@ -56,64 +67,74 @@ export function mountExchange(root, handlers = {}) {
   let localError = null;
   let touched = { size: false, margin: false, deposit: false, withdraw: false, mark: false };
   let dialogSpec = null;
+  let phase = null;
+  const keys = { position: null, receipts: null, receiptItems: null, rounds: null };
   const timers = new Set();
+  // Run after the current focus change settles (focusout fires before the
+  // next element is focused).
+  const later = (fn) => { const t = setTimeout(() => { timers.delete(t); fn(); }, 0); timers.add(t); };
 
   root.classList.add('xc');
   root.replaceChildren();
 
-  // ---------- header ----------
   const r = {};
-  r.networkBadge = h('span', { class: 'xc-badge' });
-  r.session = h('div', { class: 'xc-session' });
-  r.mark = h('strong', { class: 'xc-ticker__mark' });
-  r.round = h('span');
-  r.funding = h('span');
-  const header = h('header', { class: 'xc-top' },
+
+  // ---------- top bar: brand, network, collateral, session ----------
+  r.netDot = h('span', { class: 'xc-dot', 'aria-hidden': 'true' });
+  r.netText = h('span');
+  r.network = h('span', { class: 'xc-tag xc-net' }, r.netDot, r.netText);
+  r.sessionId = h('span', { class: 'xc-who__id' });
+  r.custody = h('span', { class: 'xc-who__key' });
+  r.who = h('div', { class: 'xc-who' }, r.sessionId, r.custody);
+  const top = h('header', { class: 'xc-top' },
     h('div', { class: 'xc-brand' },
-      h('span', { class: 'xc-brand__mark', 'aria-hidden': 'true', text: 'X' }),
-      h('span', { class: 'xc-brand__name' }, h('span', { class: 'is-primary', text: 'Xythum ' }), h('span', { class: 'is-accent', text: 'Perps' }))),
-    h('div', { class: 'xc-ticker', role: 'group', 'aria-label': 'Market' },
-      h('div', { class: 'xc-ticker__pair' },
-        h('strong', { text: 'BTC-PERP' }),
-        h('span', { class: 'xc-muted', text: `Isolated long · ${COLLATERAL} margin` })),
-      stat('Mark (USD)', r.mark),
-      stat('Oracle round', r.round),
-      stat(`Funding index (${COLLATERAL})`, r.funding)),
-    h('div', { class: 'xc-top__right' }, r.networkBadge, r.session));
+      h('span', { class: 'xc-brand__x', 'aria-hidden': 'true' }),
+      h('span', { class: 'xc-brand__name' }, 'Xythum', h('span', { class: 'xc-brand__sub', text: ' Perps' }))),
+    h('div', { class: 'xc-top__ctx' },
+      r.network,
+      h('span', { class: 'xc-tag', title: `${COLLATERAL} is a mock token on a test network with no cash value.` }, h('strong', { text: COLLATERAL }), ' mock collateral')),
+    r.who);
+
+  // ---------- market strip ----------
+  r.mark = h('strong', { class: 'xc-fig xc-fig--lg' });
+  r.round = h('strong', { class: 'xc-fig' });
+  r.funding = h('strong', { class: 'xc-fig' });
+  r.change = h('strong', { class: 'xc-fig' });
+  const figure = (label, el, extra) => h('div', { class: 'xc-strip__fig' }, h('span', { class: 'xc-label', text: label }), h('span', {}, el, extra ?? null));
+  const strip = h('section', { class: 'xc-strip', 'aria-label': 'Market' },
+    h('div', { class: 'xc-strip__pair' },
+      h('h1', { class: 'xc-pair', text: 'BTC-PERP' }),
+      h('span', { class: 'xc-muted', text: `Isolated long · ${COLLATERAL} margin · ≤ ${MAX_LEVERAGE}x` })),
+    figure('Oracle mark', r.mark, unit('USD')),
+    figure('Round', r.round),
+    figure('Funding index', r.funding, unit()),
+    figure('Since first round', r.change, unit('USD')),
+    h('nav', { class: 'xc-jumps', 'aria-label': 'Jump to section' },
+      h('a', { class: 'xc-link', href: `#${id}-chart`, text: 'Chart' }),
+      h('a', { class: 'xc-link', href: `#${id}-activity`, text: 'Activity' }),
+      h('a', { class: 'xc-link', href: `#${id}-privacy`, text: 'Who can see' })));
 
   // ---------- status ----------
   r.statusText = h('span', { class: 'xc-status__text' });
   r.proof = h('span', { class: 'xc-status__proof' });
+  r.notice = h('span', { class: 'xc-status__notice' });
   r.status = h('div', { class: 'xc-status', role: 'status', 'aria-live': 'polite' },
-    h('span', { class: 'xc-spinner', 'aria-hidden': 'true' }), r.statusText, r.proof);
+    h('span', { class: 'xc-spinner', 'aria-hidden': 'true' }), r.statusText, r.proof, r.notice);
   r.alertText = h('span');
-  r.alert = h('div', { class: 'xc-alert', role: 'alert', hidden: true },
-    r.alertText,
-    h('button', { type: 'button', class: 'xc-link', text: 'Dismiss', onclick: () => { localError = null; render(); } }));
-
-  // ---------- collapsible panel ----------
-  function panel(key, title, body, { extra, cls = '' } = {}) {
-    const bodyId = `${id}-${key}`;
-    const btn = h('button', { type: 'button', class: 'xc-panel__toggle', 'aria-expanded': 'true', 'aria-controls': bodyId },
-      h('span', { text: title }), h('span', { class: 'xc-chev', 'aria-hidden': 'true' }));
-    const wrapper = h('div', { class: 'xc-panel__body', id: bodyId }, body);
-    const sec = h('section', { class: `xc-panel ${cls}`, 'aria-labelledby': `${bodyId}-h` },
-      h('h2', { class: 'xc-panel__head', id: `${bodyId}-h` }, btn, extra ?? null), wrapper);
-    btn.addEventListener('click', () => {
-      const open = btn.getAttribute('aria-expanded') !== 'true';
-      btn.setAttribute('aria-expanded', String(open));
-      sec.classList.toggle('is-collapsed', !open);
-    });
-    return sec;
-  }
+  r.alertDismiss = h('button', { type: 'button', class: 'xc-link', text: 'Dismiss', onclick: () => { localError = null; render(); } });
+  r.alert = h('div', { class: 'xc-alert', role: 'alert', hidden: true }, r.alertText, r.alertDismiss);
 
   // ---------- chart ----------
-  r.chartLast = h('span', { class: 'xc-panel__meta' });
+  r.chartMeta = h('span', { class: 'xc-card__meta' });
   const chartHost = h('div', { class: 'xc-chart-host' });
-  const chartPanel = panel('chart', 'BTC mark · oracle rounds', chartHost, { extra: r.chartLast, cls: 'xc-area-chart' });
+  r.chartCard = h('section', { class: 'xc-card xc-area-chart', id: `${id}-chart`, 'aria-labelledby': `${id}-chart-h` },
+    h('div', { class: 'xc-card__head' },
+      h('h2', { id: `${id}-chart-h`, class: 'xc-card__title', text: 'BTC mark · oracle rounds' }),
+      r.chartMeta),
+    chartHost);
   const chart = createMarkChart(chartHost);
 
-  // ---------- trade form ----------
+  // ---------- fields ----------
   function field({ key, label, value, unitText, hint }) {
     const inputId = `${id}-${key}`;
     const input = h('input', {
@@ -127,61 +148,45 @@ export function mountExchange(root, handlers = {}) {
     return { input, err, hint: hintEl, box, wrap };
   }
 
-  r.size = field({ key: 'size', label: 'Size', value: '0.010', unitText: 'BTC' });
-  const stepBtn = (delta, text, label) => h('button', {
-    type: 'button', class: 'xc-step', 'aria-label': label, text,
-    onclick: () => stepSize(delta),
-  });
-  r.sizeDown = stepBtn(-1, '−', 'Decrease size by 0.001 BTC');
-  r.sizeUp = stepBtn(1, '+', 'Increase size by 0.001 BTC');
-  r.size.box.prepend(r.sizeDown);
-  r.size.box.append(r.sizeUp);
-  r.margin = field({ key: 'margin', label: 'Margin', value: '300.00', unitText: COLLATERAL, hint: `Up to ${formatCents(MAX_MARGIN_CENTS)} ${COLLATERAL} · max ${MAX_LEVERAGE}x` });
-  r.levBtns = [1, 2, 3].map((k) => h('button', {
-    type: 'button', class: 'xc-chip', text: `${k}x`, 'aria-label': `Set margin for ${k}x leverage`,
-    onclick: () => setLeverage(k),
-  }));
-  r.levValue = h('strong');
-  r.levFill = h('span', { class: 'xc-meter__fill' });
-  r.levMeter = h('div', { class: 'xc-meter', role: 'meter', 'aria-valuemin': '0', 'aria-valuemax': String(MAX_LEVERAGE), 'aria-label': 'Leverage' }, r.levFill);
-  r.quote = h('dl', { class: 'xc-rows xc-quote', 'aria-label': 'Quote preview' });
-  r.blocker = h('p', { class: 'xc-blocker', id: `${id}-blocker`, 'aria-live': 'polite' });
-  r.review = h('button', { type: 'submit', class: 'xc-btn xc-btn--long xc-btn--block', 'aria-describedby': `${id}-blocker`, text: 'Review long' });
-  r.form = h('form', { class: 'xc-form', novalidate: true },
-    h('div', { class: 'xc-side-pill' },
-      h('span', { class: 'xc-side-pill__long', text: 'Long' }),
-      h('span', { class: 'xc-muted', text: `Isolated · ≤ ${MAX_LEVERAGE}x · single slot` })),
-    r.size.wrap,
-    r.margin.wrap,
-    h('div', { class: 'xc-lev' },
-      h('div', { class: 'xc-lev__head' }, h('span', { text: 'Leverage' }), r.levValue),
-      r.levMeter,
-      h('div', { class: 'xc-chips', role: 'group', 'aria-label': 'Leverage presets' }, r.levBtns)),
-    r.quote,
-    h('aside', { class: 'xc-privacy' },
-      h('strong', { text: 'Private opening' }),
-      h('p', { text: `Your margin and random blinder are generated in this browser, which never sends them to the coordinator in plaintext. The chain sees a salted commitment and the fixed ${formatCents(ESCROW_CENTS)} ${COLLATERAL} escrow. The maker sees size and entry. The opening is encrypted to both designated keepers, and either keeper can decrypt the full opening, including margin and blinder, so it can liquidate if needed.` })),
-    r.review,
-    r.blocker);
-  r.form.addEventListener('submit', (e) => { e.preventDefault(); touched.size = touched.margin = true; reviewOpen(); });
-  r.size.input.addEventListener('input', () => { touched.size = true; renderForm(); });
-  r.margin.input.addEventListener('input', () => { touched.margin = true; renderForm(); });
-  r.size.input.addEventListener('keydown', (e) => {
-    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') { e.preventDefault(); stepSize(e.key === 'ArrowUp' ? 1 : -1); }
-  });
-  const tradePanel = panel('trade', 'Trade', r.form, { cls: 'xc-area-trade' });
+  // ---------- ticket: next action ----------
+  const stepDefs = [['session', 'Session'], ['escrow', 'Escrow'], ['open', 'Open long']];
+  r.steps = {};
+  const stepList = h('ol', { class: 'xc-steps', 'aria-label': 'Progress' },
+    stepDefs.map(([k, label], i) => {
+      const li = h('li', { class: 'xc-step' }, h('span', { class: 'xc-step__n', 'aria-hidden': 'true', text: String(i + 1) }), h('span', { text: label }), h('span', { class: 'xc-sr' }));
+      r.steps[k] = li;
+      return li;
+    }));
+  r.nextTitle = h('h2', { class: 'xc-next__title', id: `${id}-next-h`, tabindex: '-1' });
+  r.nextBody = h('p', { class: 'xc-next__body' });
+  r.nextLinkLabel = h('span');
+  r.nextLink = h('a', { class: 'xc-link', target: '_blank', rel: 'noopener noreferrer', text: 'View on explorer' });
+  r.nextEvidence = h('p', { class: 'xc-next__evidence' }, r.nextLinkLabel, ' ', r.nextLink);
+  r.startBtn = h('button', { type: 'button', class: 'xc-btn xc-btn--act xc-btn--block', text: 'Start session', onclick: () => run('onStart') });
+  r.nextClose = h('button', { type: 'button', class: 'xc-btn xc-btn--risk', text: 'Close position', onclick: () => requestClose() });
+  r.nextArm = h('button', { type: 'button', class: 'xc-btn xc-btn--ghost', text: 'Arm Keeper B', onclick: () => run('onArmKeeper') });
+  // Once Keeper B is armed, the natural next step is to move the mark; this
+  // opens the (still secondary) testnet tools at the mark field.
+  r.nextMark = h('button', { type: 'button', class: 'xc-btn xc-btn--ghost', text: 'Publish a test mark', 'aria-controls': `${id}-tools`, onclick: () => openMarkTool() });
+  r.nextActions = h('div', { class: 'xc-next__actions' }, r.startBtn, r.nextClose, r.nextArm, r.nextMark);
+  r.startNote = h('details', { class: 'xc-disclose' },
+    h('summary', { text: 'What Start session does' }),
+    h('ul', { class: 'xc-list' },
+      h('li', { text: 'Creates a signing key in this browser and proves possession of it to the coordinator.' }),
+      h('li', { text: `The coordinator provisions a NEAR testnet trader account controlled by that key, holding mock ${COLLATERAL}.` }),
+      h('li', { text: 'The page then checks the market config and the key on chain before showing balances.' }),
+      h('li', { text: 'Nothing is created until you click. A saved session in this browser is reattached automatically.' })));
+  r.next = h('section', { class: 'xc-next', 'aria-labelledby': r.nextTitle.id },
+    stepList, r.nextTitle, r.nextBody, r.nextEvidence, r.nextActions, r.startNote);
 
-  // ---------- account ----------
-  r.bal = { wallet: h('span'), available: h('span'), locked: h('span'), maker: h('span') };
-  const balRow = (label, el, note) => h('div', { class: 'xc-row' },
-    h('dt', {}, label, note ? h('span', { class: 'xc-muted xc-row__note', text: note }) : null),
-    h('dd', {}, el, ' ', unit()));
-  r.balances = h('dl', { class: 'xc-rows' },
-    balRow('Wallet', r.bal.wallet, 'token balance'),
-    balRow('Available', r.bal.available, 'in market'),
-    balRow('Locked', r.bal.locked, 'escrow'),
-    balRow('Maker vault', r.bal.maker, 'counterparty'));
-  r.accountNote = h('p', { class: 'xc-muted xc-small' });
+  // ---------- ticket: collateral ----------
+  r.bal = { wallet: h('span', { class: 'xc-fig' }), available: h('span', { class: 'xc-fig' }), locked: h('span', { class: 'xc-fig' }), maker: h('span', { class: 'xc-fig' }) };
+  const balCell = (label, el, note) => h('div', { class: 'xc-bal' }, h('dt', { class: 'xc-label', title: note, text: label }), h('dd', {}, el));
+  r.balances = h('dl', { class: 'xc-bals', 'aria-label': `Balances in ${COLLATERAL}` },
+    balCell('Wallet', r.bal.wallet, 'Token balance in your trader account'),
+    balCell('Available', r.bal.available, 'In the market, free to use or withdraw'),
+    balCell('Locked', r.bal.locked, 'Escrow held by an open position'),
+    balCell('Maker vault', r.bal.maker, 'Counterparty vault free to reserve'));
   function amountForm(key, label, verb) {
     const f = field({ key, label, value: '', unitText: COLLATERAL });
     f.input.placeholder = '0.00';
@@ -199,12 +204,69 @@ export function mountExchange(root, handlers = {}) {
   r.withdraw.input.addEventListener('input', () => { touched.withdraw = true; renderAccount(); });
   r.deposit.form.addEventListener('submit', (e) => { e.preventDefault(); touched.deposit = true; reviewTransfer('deposit'); });
   r.withdraw.form.addEventListener('submit', (e) => { e.preventDefault(); touched.withdraw = true; reviewTransfer('withdraw'); });
-  const accountPanel = panel('account', 'Account', [
-    r.balances, r.accountNote, h('div', { class: 'xc-amounts' }, r.deposit.form, r.withdraw.form),
-  ], { cls: 'xc-area-account' });
+  r.withdrawBox = h('details', { class: 'xc-disclose' }, h('summary', { text: 'Withdraw to wallet' }), r.withdraw.form);
+  // Funding phase: forced open with its summary hidden, so Deposit leads.
+  // Other phases: collapsed under the compact balance row.
+  r.transferBox = h('details', { class: 'xc-disclose xc-transfer' },
+    h('summary', { text: 'Deposit or withdraw' }),
+    h('div', { class: 'xc-transfer__body' }, r.deposit.form, r.withdrawBox));
+  r.fund = h('section', { class: 'xc-tsec xc-fund', 'aria-labelledby': `${id}-fund-h` },
+    h('div', { class: 'xc-tsec__head' },
+      h('h3', { id: `${id}-fund-h`, class: 'xc-tsec__title', text: 'Collateral' }),
+      h('span', { class: 'xc-muted xc-small', text: `${COLLATERAL} · mock, no cash value` })),
+    r.balances, r.transferBox);
 
-  // ---------- test controls ----------
-  r.markField = field({ key: 'mark', label: 'Test mark', value: '', unitText: 'USD', hint: 'Publishes a new oracle round in 10 USD ticks.' });
+  // ---------- ticket: order ----------
+  r.size = field({ key: 'size', label: 'Size', value: DEFAULT_SIZE, unitText: 'BTC' });
+  const stepBtn = (delta, text, label) => h('button', {
+    type: 'button', class: 'xc-stepper', 'aria-label': label, text,
+    onclick: () => stepSize(delta),
+  });
+  r.sizeDown = stepBtn(-1, '−', 'Decrease size by 0.001 BTC');
+  r.sizeUp = stepBtn(1, '+', 'Increase size by 0.001 BTC');
+  r.sizeMax = h('button', { type: 'button', class: 'xc-chip', text: 'Max', 'aria-label': `Largest size this margin allows at ${MAX_LEVERAGE}x` });
+  r.sizeMax.addEventListener('click', () => maxSize());
+  r.size.box.prepend(r.sizeDown);
+  r.size.box.append(r.sizeUp, r.sizeMax);
+  r.margin = field({ key: 'margin', label: 'Margin', value: DEFAULT_MARGIN, unitText: COLLATERAL, hint: `Up to ${formatCents(MAX_MARGIN_CENTS)} ${COLLATERAL}, paid from the fixed escrow` });
+  r.levBtns = [1, 2, 3].map((k) => h('button', {
+    type: 'button', class: 'xc-chip', text: `${k}x`, 'aria-label': `Set margin for ${k}x leverage`,
+    onclick: () => setLeverage(k),
+  }));
+  r.levValue = h('strong', { class: 'xc-fig' });
+  r.levFill = h('span', { class: 'xc-meter__fill' });
+  r.levMeter = h('div', { class: 'xc-meter', role: 'meter', 'aria-valuemin': '0', 'aria-valuemax': String(MAX_LEVERAGE), 'aria-label': 'Leverage' }, r.levFill);
+  r.quoteRound = h('span', { class: 'xc-muted xc-small' });
+  r.quote = h('dl', { class: 'xc-rows xc-quote', 'aria-labelledby': `${id}-quote-h` });
+  r.blocker = h('p', { class: 'xc-blocker', id: `${id}-blocker`, 'aria-live': 'polite' });
+  r.review = h('button', { type: 'submit', class: 'xc-btn xc-btn--act xc-btn--block xc-review', 'aria-describedby': `${id}-blocker`, text: 'Review long' });
+  r.privacyLink = h('a', { class: 'xc-link xc-privacy-link', href: `#${id}-privacy`, text: 'Who can see the opening?' });
+  // Review long sits directly after the inputs that define the order, so the
+  // ready action is on screen with them; the quote it previews follows.
+  r.form = h('form', { class: 'xc-tsec xc-order', novalidate: true, 'aria-labelledby': `${id}-order-h` },
+    h('div', { class: 'xc-tsec__head' },
+      h('h3', { id: `${id}-order-h`, class: 'xc-tsec__title' }, h('span', { class: 'xc-side', text: 'Long' }), ' BTC-PERP'),
+      h('span', { class: 'xc-muted xc-small', text: 'Isolated · one slot' })),
+    h('div', { class: 'xc-order__inputs' }, r.size.wrap, r.margin.wrap),
+    h('div', { class: 'xc-lev' },
+      h('div', { class: 'xc-lev__head' }, h('span', { class: 'xc-label', text: `Leverage · max ${MAX_LEVERAGE}x` }), r.levValue),
+      r.levMeter,
+      h('div', { class: 'xc-chips', role: 'group', 'aria-label': 'Leverage presets' }, r.levBtns)),
+    r.review,
+    r.blocker,
+    h('div', { class: 'xc-quote-wrap' },
+      h('div', { class: 'xc-lev__head' }, h('h4', { class: 'xc-label', id: `${id}-quote-h`, text: 'Execution quote' }), r.quoteRound),
+      r.quote),
+    r.privacyLink);
+  r.form.addEventListener('submit', (e) => { e.preventDefault(); touched.size = touched.margin = true; reviewOpen(); });
+  r.size.input.addEventListener('input', () => { touched.size = true; renderForm(); });
+  r.margin.input.addEventListener('input', () => { touched.margin = true; renderForm(); });
+  r.size.input.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') { e.preventDefault(); stepSize(e.key === 'ArrowUp' ? 1 : -1); }
+  });
+
+  // ---------- ticket: testnet tools ----------
+  r.markField = field({ key: 'mark', label: 'Test mark', value: '', unitText: 'USD', hint: 'Publishes a new oracle round to this session\'s test market, in 10 USD ticks.' });
   r.markField.input.inputMode = 'numeric';
   r.markLiq = h('button', { type: 'button', class: 'xc-chip', text: 'Below liq.', 'aria-label': 'Fill the first tick below the liquidation price' });
   r.markField.box.append(r.markLiq);
@@ -226,42 +288,48 @@ export function mountExchange(root, handlers = {}) {
   });
   r.keeperState = h('span', { class: 'xc-pill' });
   r.keeperNote = h('p', { class: 'xc-muted xc-small' });
-  r.arm = h('button', { type: 'button', class: 'xc-btn xc-btn--ghost', text: 'Arm keeper', onclick: () => run('onArmKeeper') });
-  const testPanel = panel('test', 'Test controls', [
-    h('p', { class: 'xc-muted xc-small', text: 'Protocol tools for this test market. They are separate from trading and act on the shared oracle and keeper.' }),
-    r.markForm, r.markEffect,
-    h('div', { class: 'xc-keeper' },
-      h('div', { class: 'xc-lev__head' }, h('span', { text: 'Liquidation keeper' }), r.keeperState),
-      r.keeperNote, r.arm),
-  ], { cls: 'xc-area-test xc-panel--test' });
+  r.arm = h('button', { type: 'button', class: 'xc-btn xc-btn--ghost', text: 'Arm Keeper B', onclick: () => run('onArmKeeper') });
+  r.toolsSummaryNote = h('span', { class: 'xc-muted xc-small' });
+  r.tools = h('details', { class: 'xc-tsec xc-tools', id: `${id}-tools` },
+    h('summary', {}, h('span', { class: 'xc-tsec__title', text: 'Testnet tools' }), r.toolsSummaryNote),
+    h('div', { class: 'xc-tools__body' },
+      h('p', { class: 'xc-muted xc-small', text: 'Protocol controls for this session\'s isolated test market. They act on its oracle and backup keeper, separately from your trade.' }),
+      r.markForm, r.markEffect,
+      h('div', { class: 'xc-keeper' },
+        h('div', { class: 'xc-lev__head' }, h('span', { class: 'xc-label', text: 'Keeper B · backup liquidation keeper' }), r.keeperState),
+        r.keeperNote, r.arm)));
 
-  // ---------- tabs: position / receipts / mark rounds ----------
-  const tabDefs = [['position', 'Position'], ['receipts', 'Receipts'], ['rounds', 'Mark rounds']];
+  r.ticket = h('aside', { class: 'xc-ticket xc-area-ticket', 'aria-label': 'Order ticket' }, r.next, r.fund, r.form, r.tools);
+
+  // ---------- activity: positions / receipts / mark rounds ----------
+  const tabDefs = [['position', 'Positions'], ['receipts', 'Receipts'], ['rounds', 'Mark rounds']];
   r.tabs = {};
+  r.counts = {};
   r.tabPanels = {};
-  const tablist = h('div', { class: 'xc-tabs', role: 'tablist', 'aria-label': 'Position and activity' });
+  const tablist = h('div', { class: 'xc-tabs', role: 'tablist', 'aria-label': 'Activity' });
   for (const [key, label] of tabDefs) {
+    r.counts[key] = h('span', { class: 'xc-count' });
     const tab = h('button', {
       type: 'button', role: 'tab', class: 'xc-tab', id: `${id}-tab-${key}`, 'aria-controls': `${id}-tp-${key}`,
       'aria-selected': key === 'position' ? 'true' : 'false', tabindex: key === 'position' ? '0' : '-1',
-    }, h('span', { text: label }), h('span', { class: 'xc-count' }));
+    }, h('span', { text: label }), r.counts[key]);
     tab.addEventListener('click', () => selectTab(key));
     r.tabs[key] = tab;
     tablist.append(tab);
     r.tabPanels[key] = h('div', { class: 'xc-tabpanel', role: 'tabpanel', id: `${id}-tp-${key}`, 'aria-labelledby': tab.id, tabindex: '0', hidden: key !== 'position' });
   }
   tablist.addEventListener('keydown', (e) => {
-    const keys = tabDefs.map(([k]) => k);
-    const cur = keys.findIndex((k) => r.tabs[k].getAttribute('aria-selected') === 'true');
+    const ks = tabDefs.map(([k]) => k);
+    const cur = ks.findIndex((k) => r.tabs[k].getAttribute('aria-selected') === 'true');
     let next = null;
-    if (e.key === 'ArrowRight') next = (cur + 1) % keys.length;
-    else if (e.key === 'ArrowLeft') next = (cur - 1 + keys.length) % keys.length;
+    if (e.key === 'ArrowRight') next = (cur + 1) % ks.length;
+    else if (e.key === 'ArrowLeft') next = (cur - 1 + ks.length) % ks.length;
     else if (e.key === 'Home') next = 0;
-    else if (e.key === 'End') next = keys.length - 1;
+    else if (e.key === 'End') next = ks.length - 1;
     if (next == null) return;
     e.preventDefault();
-    selectTab(keys[next]);
-    r.tabs[keys[next]].focus();
+    selectTab(ks[next]);
+    r.tabs[ks[next]].focus();
   });
   function selectTab(key) {
     for (const [k] of tabDefs) {
@@ -271,13 +339,68 @@ export function mountExchange(root, handlers = {}) {
       r.tabPanels[k].hidden = !on;
     }
   }
-  const bookPanel = h('section', { class: 'xc-panel xc-area-book', 'aria-label': 'Position and activity' },
+  // Position panel: details are rebuilt on change; the action bar is persistent.
+  r.posBody = h('div', { class: 'xc-posbody' });
+  // While a Copy / Explorer control inside the details has focus, rebuilding
+  // would drop focus, so the fresh view renders above and the old details stay
+  // (marked as earlier) until focus leaves them.
+  r.posFresh = h('div', { class: 'xc-posbody', hidden: true });
+  r.posStaleNote = h('p', { class: 'xc-small xc-muted xc-stale-note', hidden: true, text: 'Earlier details, kept while a control in them has focus.' });
+  for (const box of [r.posBody, r.posFresh]) {
+    box.addEventListener('focusout', (e) => {
+      if (box.contains(e.relatedTarget)) return;
+      // Defer so the newly focused element is settled before rebuilding.
+      later(renderPosition);
+    });
+  }
+  r.posNoWitness = h('p', { class: 'xc-notice', id: `${id}-nowitness`, hidden: true, text: 'Voluntary close is unavailable here: closing needs a proof built from the private opening, and this browser does not hold it. The designated keepers can still liquidate the slot from their encrypted copy if the mark crosses liquidation.' });
+  r.posClose = h('button', { type: 'button', class: 'xc-btn xc-btn--risk', text: 'Close position', onclick: () => requestClose() });
+  r.posArm = h('button', { type: 'button', class: 'xc-btn xc-btn--ghost', text: 'Arm Keeper B', onclick: () => run('onArmKeeper') });
+  r.posActions = h('div', { class: 'xc-actions', hidden: true }, r.posArm, r.posClose);
+  r.tabPanels.position.append(r.posFresh, r.posStaleNote, r.posBody, r.posNoWitness, r.posActions);
+  r.tabPanels.receipts.addEventListener('focusout', (e) => {
+    if (r.tabPanels.receipts.contains(e.relatedTarget)) return;
+    later(renderReceipts);
+  });
+  r.activity = h('section', { class: 'xc-card xc-area-book', id: `${id}-activity`, 'aria-label': 'Activity' },
     tablist, ...tabDefs.map(([k]) => r.tabPanels[k]));
+
+  // ---------- who can see the opening ----------
+  const EXAMPLE_TX = [
+    ['Open', '9jm21tNY6doDZKxLmmmfVPNGhaiRqTVa3uUMsERo6JQD'],
+    ['Keeper', 'F5zj6buC35jzdVesQxHWX4m6YJaBiFje5eBfbJ3a54dD'],
+  ];
+  const seeItem = (who, scope, sees, detail) => h('li', { class: `xc-see xc-see--${scope}` },
+    h('span', { class: 'xc-see__who' }, h('span', { class: 'xc-see__mark', 'aria-hidden': 'true' }), who),
+    h('strong', { class: 'xc-see__what', text: sees }),
+    h('p', { class: 'xc-see__detail', text: detail }));
+  r.privacyCard = h('section', { class: 'xc-card xc-area-privacy xc-seecard', id: `${id}-privacy`, 'aria-labelledby': `${id}-privacy-h` },
+    h('div', { class: 'xc-card__head' },
+      h('h2', { id: `${id}-privacy-h`, class: 'xc-card__title', text: 'Who can see the opening?' }),
+      h('span', { class: 'xc-card__meta', text: 'Opening = size, entry, margin and position blinder' })),
+    h('ol', { class: 'xc-see-list' },
+      seeItem('NEAR chain', 'public', 'Commitment and fixed escrow',
+        `Anyone reading the chain sees a salted commitment to the opening and the fixed ${formatCents(ESCROW_CENTS)} ${COLLATERAL} escrow it locks.`),
+      seeItem('Maker', 'maker', 'Size and entry',
+        'The maker sees size and entry mark, salted with a separate quote blinder, to approve the quote.'),
+      seeItem('Keeper A or B', 'keeper', 'The full opening',
+        'The opening is encrypted to both designated keepers. Either can decrypt all of it, including margin and the position blinder, to liquidate.')),
+    h('div', { class: 'xc-see-foot' },
+      h('p', { class: 'xc-small xc-muted', text: 'Close and liquidation amounts settle on chain and can allow inference about the opening.' }),
+      h('p', { class: 'xc-small xc-see-examples' },
+        h('span', { class: 'xc-muted', text: 'Example testnet receipts, archived, not this session: ' }),
+        EXAMPLE_TX.flatMap(([label, hash], i) => [
+          i ? h('span', { class: 'xc-muted', text: ' · ' }) : null,
+          h('a', {
+            class: 'xc-link', href: `https://testnet.nearblocks.io/txns/${hash}`, target: '_blank', rel: 'noopener noreferrer',
+            title: hash, 'aria-label': `Example ${label.toLowerCase()} receipt ${shortHash(hash, 4, 4)} on testnet NearBlocks (archived example, new tab)`,
+          }, `${label} ${shortHash(hash, 4, 4)}`),
+        ]))));
 
   // ---------- dialog ----------
   r.dlgTitle = h('h2', { id: `${id}-dlg-t`, class: 'xc-dialog__title' });
   r.dlgBody = h('div', { class: 'xc-dialog__body', id: `${id}-dlg-b` });
-  r.dlgConfirm = h('button', { type: 'button', class: 'xc-btn xc-btn--long', text: 'Confirm' });
+  r.dlgConfirm = h('button', { type: 'button', class: 'xc-btn xc-btn--act', text: 'Confirm' });
   r.dlgCancel = h('button', { type: 'button', class: 'xc-btn xc-btn--ghost', text: 'Cancel' });
   r.dialog = h('dialog', { class: 'xc-dialog', 'aria-labelledby': r.dlgTitle.id, 'aria-describedby': r.dlgBody.id },
     r.dlgTitle, r.dlgBody, h('div', { class: 'xc-dialog__actions' }, r.dlgCancel, r.dlgConfirm));
@@ -297,21 +420,29 @@ export function mountExchange(root, handlers = {}) {
   });
 
   // ---------- assemble ----------
-  const main = h('div', { class: 'xc-main' }, chartPanel, bookPanel);
-  const side = h('aside', { class: 'xc-side', 'aria-label': 'Trading' }, tradePanel, accountPanel, testPanel);
+  // DOM order is ticket, chart, activity: on narrow screens that is also the
+  // visual order, so onboarding and deposit sit near the top. Desktop places
+  // the ticket in a right column spanning the chart and activity rows.
   root.append(
-    header,
+    top,
+    strip,
     h('div', { class: 'xc-statusbar' }, r.status, r.alert),
-    h('main', { class: 'xc-grid' }, main, side),
+    h('main', { class: 'xc-grid' }, r.ticket, r.chartCard, r.activity, r.privacyCard),
     h('footer', { class: 'xc-foot' },
-      h('p', { text: `${COLLATERAL} is mock collateral on a test network with no cash value. Prices are the market's authenticated oracle marks in USD. Read-only replay is a separate view.` })),
+      h('p', { text: `${COLLATERAL} is mock collateral on a NEAR test network with no cash value. Prices are this market's oracle marks in USD, not an external market price. Nothing here promises a return.` })),
     r.dialog);
 
   // ---------- behaviour ----------
   function controlsLocked() { return Boolean(pending || state.busy); }
 
+  function isGone(el) {
+    return !el || !el.isConnected || el === document.body || el.disabled || el.closest('[hidden]') != null
+      || (typeof el.checkVisibility === 'function' && !el.checkVisibility());
+  }
+
   async function run(name, ...args) {
     if (!has(name) || controlsLocked()) return;
+    const origin = document.activeElement;
     pending = name;
     localError = null;
     render();
@@ -322,6 +453,17 @@ export function mountExchange(root, handlers = {}) {
     } finally {
       pending = null;
       render();
+      // An action can hide or disable the control that started it (Start
+      // session, Close position). Land focus on the next step once, instead
+      // of leaving it on <body>.
+      // Disabled controls also drop focus while the action runs; return it to
+      // the control that started the action when it is still usable.
+      const active = document.activeElement;
+      const lost = !active || active === document.body || isGone(active);
+      if (lost && !r.dialog.open && origin && origin !== document.body && root.contains(origin)) {
+        if (isGone(origin)) (phase === 'ready' && !isGone(r.review) ? r.review : r.nextTitle).focus();
+        else origin.focus();
+      }
     }
   }
 
@@ -330,6 +472,17 @@ export function mountExchange(root, handlers = {}) {
     const base = cur.ok ? cur.value : MIN_LOTS - (delta > 0 ? 1 : 0);
     const next = Math.min(MAX_LOTS, Math.max(MIN_LOTS, base + delta));
     r.size.input.value = lotsToBtcString(next);
+    touched.size = true;
+    renderForm();
+  }
+
+  function maxSize() {
+    const margin = parseCents(r.margin.input.value, { max: MAX_MARGIN_CENTS });
+    const mark = state.oracle?.price_ticks;
+    if (!margin.ok || !mark) return;
+    const lots = Math.min(MAX_LOTS, Math.floor((MAX_LEVERAGE * margin.value) / mark));
+    if (lots < MIN_LOTS) return;
+    r.size.input.value = lotsToBtcString(lots);
     touched.size = true;
     renderForm();
   }
@@ -344,7 +497,17 @@ export function mountExchange(root, handlers = {}) {
     renderForm();
   }
 
+  function openMarkTool() {
+    r.tools.open = true;
+    r.markField.input.focus();
+  }
+
   function slotOccupied() { return Boolean(state.position || state.active); }
+
+  function needsEscrow() {
+    const a = state.balances.available;
+    return Boolean(state.session) && !slotOccupied() && a != null && a < ESCROW_CENTS;
+  }
 
   function readForm() {
     const lots = parseLots(r.size.input.value);
@@ -368,7 +531,7 @@ export function mountExchange(root, handlers = {}) {
   function quoteRows(q) {
     const liq = q.liqTicks;
     return [
-      row('Mark · entry', h('span', {}, `${formatTicks(q.markTicks)} `, unit('USD'), h('span', { class: 'xc-muted', text: ` · R${state.oracle?.round ?? '—'}` }))),
+      row('Entry at oracle mark', h('span', {}, `${formatTicks(q.markTicks)} `, unit('USD'))),
       row('Notional', h('span', {}, `${formatCents(q.notionalCents)} `, unit())),
       row('Leverage', formatLeverage(q.leverage), { tone: q.withinLeverage ? null : 'neg' }),
       row('Est. liquidation', h('span', {}, `${liq > 0 ? formatPriceUsd(liq * TICK_USD) : 'None'} `, liq > 0 ? unit('USD') : null), { tone: 'neg' }),
@@ -377,51 +540,67 @@ export function mountExchange(root, handlers = {}) {
     ];
   }
 
+  let quoteKey = null;
   function renderForm() {
     const { lots, margin, quote, blocker } = readForm();
     const locked = controlsLocked();
     const disabledAll = !state.session || slotOccupied();
-    for (const el of [r.size.input, r.margin.input, r.sizeDown, r.sizeUp, ...r.levBtns]) el.disabled = disabledAll || locked;
+    for (const el of [r.size.input, r.margin.input, r.sizeDown, r.sizeUp, r.sizeMax, ...r.levBtns]) el.disabled = disabledAll || locked;
     r.levBtns.forEach((b) => { b.disabled = b.disabled || !lots.ok || !state.oracle; });
+    r.sizeMax.disabled = r.sizeMax.disabled || !state.oracle;
 
     const setErr = (f, res, isTouched) => {
       const msg = isTouched && !res.ok ? res.reason : '';
-      f.err.textContent = msg;
+      setText(f.err, msg);
       f.input.setAttribute('aria-invalid', msg ? 'true' : 'false');
     };
     setErr(r.size, lots, touched.size);
     setErr(r.margin, margin, touched.margin);
-    r.size.hint.textContent = lots.ok
+    setText(r.size.hint, lots.ok
       ? `${lots.value} lot${lots.value === 1 ? '' : 's'} · 0.001 BTC per lot · max ${lotsToBtcString(MAX_LOTS)}`
-      : `0.001 BTC per lot · max ${lotsToBtcString(MAX_LOTS)} BTC`;
+      : `0.001 BTC per lot · max ${lotsToBtcString(MAX_LOTS)} BTC`);
 
+    setText(r.quoteRound, state.oracle ? `round ${state.oracle.round}` : '');
+    const nextKey = quote ? JSON.stringify([quote.lots, quote.marginCents, quote.markTicks]) : `none:${Boolean(state.oracle)}`;
     if (quote) {
       const lev = quote.leverage;
-      r.levValue.textContent = formatLeverage(lev);
-      r.levValue.className = quote.withinLeverage ? '' : 'is-neg';
+      setText(r.levValue, formatLeverage(lev));
+      r.levValue.classList.toggle('is-neg', !quote.withinLeverage);
       r.levFill.style.width = `${Math.min(100, (lev / MAX_LEVERAGE) * 100)}%`;
       r.levMeter.classList.toggle('is-over', !quote.withinLeverage);
       r.levMeter.setAttribute('aria-valuenow', lev.toFixed(2));
       r.levMeter.setAttribute('aria-valuetext', `${lev.toFixed(2)}x of ${MAX_LEVERAGE}x maximum`);
-      r.quote.replaceChildren(...quoteRows(quote));
+      if (nextKey !== quoteKey) r.quote.replaceChildren(...quoteRows(quote));
     } else {
-      r.levValue.textContent = '—';
-      r.levValue.className = '';
+      setText(r.levValue, '—');
+      r.levValue.classList.remove('is-neg');
       r.levFill.style.width = '0%';
       r.levMeter.classList.remove('is-over');
       r.levMeter.removeAttribute('aria-valuenow');
       r.levMeter.setAttribute('aria-valuetext', 'Not available');
-      r.quote.replaceChildren(h('p', { class: 'xc-muted xc-small', text: state.oracle ? 'Enter size and margin to preview the quote.' : 'Quote preview needs a live oracle mark.' }));
+      if (nextKey !== quoteKey) {
+        r.quote.replaceChildren(h('p', { class: 'xc-muted xc-small', text: state.oracle
+          ? 'Enter size and margin to see the quote at the current oracle mark.'
+          : 'The quote is computed at the market\'s live oracle mark once a session is loaded.' }));
+      }
     }
+    quoteKey = nextKey;
     r.review.disabled = Boolean(blocker) || locked;
-    r.review.textContent = pending === 'onOpen' ? 'Opening…' : 'Review long';
-    r.blocker.textContent = blocker ?? '';
+    setText(r.review, pending === 'onOpen' || state.busy === 'Opening position' ? 'Opening…' : 'Review long');
+    setText(r.blocker, blocker ?? '');
+    // Blocker text is only useful once there is a session; before that the
+    // next-action card explains the single step.
+    r.blocker.hidden = !state.session;
   }
 
   function reviewOpen() {
     const { lots, margin, blocker } = readForm();
     renderForm();
-    if (blocker || controlsLocked()) { (lots.ok ? r.margin.input : r.size.input).focus(); return; }
+    if (blocker || controlsLocked()) {
+      if (needsEscrow()) { r.transferBox.open = true; r.deposit.input.focus(); }
+      else if (state.session && !slotOccupied()) (lots.ok ? r.margin.input : r.size.input).focus();
+      return;
+    }
     openDialog({
       title: 'Review long BTC-PERP',
       handler: 'onOpen',
@@ -436,14 +615,15 @@ export function mountExchange(root, handlers = {}) {
           out.push(h('p', { class: 'xc-notice', role: 'alert', text: `The mark moved to round ${state.oracle?.round}. Figures below use the new mark. Confirm again to proceed.` }));
         }
         if (q) {
-          out.push(h('dl', { class: 'xc-rows' },
-            row('Side', 'Long', { tone: 'pos' }),
+          out.push(h('dl', { class: 'xc-rows xc-quote' },
+            row('Side', 'Long'),
             row('Size', h('span', {}, `${lotsToBtcString(q.lots)} `, unit('BTC'), h('span', { class: 'xc-muted', text: ` · ${q.lots} lots` }))),
             row('Margin', h('span', {}, `${formatCents(q.marginCents)} `, unit())),
+            row('Oracle round', String(state.oracle?.round ?? '—')),
             ...quoteRows(q)));
         }
-        out.push(h('p', { class: 'xc-small', text: `Your client stages a private commitment, gets maker approval at this mark and keeper acknowledgments, builds the open proof, and submits the open. You may be asked to sign more than once. The quote expires if the mark changes before the open lands.` }));
-        out.push(h('p', { class: 'xc-small xc-muted', text: `Liquidation happens if equity falls below 5% of notional at the oracle mark. The keeper bounty is 1.00 ${COLLATERAL}. Margin and blinder are never sent to the coordinator in plaintext; both designated keepers can decrypt the full opening.` }));
+        out.push(h('p', { class: 'xc-small', text: 'This one confirmation authorizes your browser to sign and submit every transaction the open needs: it stages a private commitment, gets maker approval at this mark and keeper acknowledgments, builds the open proof, and submits the open. The quote expires if the mark changes before the open lands.' }));
+        out.push(h('p', { class: 'xc-small xc-muted', text: `Liquidation happens if equity falls below 5% of notional at the oracle mark. The keeper bounty is ${formatCents(KEEPER_BOUNTY_CENTS)} ${COLLATERAL}. The maker sees size and entry; margin and the position blinder are not sent to the coordinator in plaintext; either designated keeper can decrypt the full opening.` }));
         return { nodes: out, blocked: f.blocker };
       },
     });
@@ -467,9 +647,9 @@ export function mountExchange(root, handlers = {}) {
           : [['Available after', b.available - res.value], ['Wallet after', b.wallet + res.value]];
         return {
           nodes: [
-            h('dl', { class: 'xc-rows' },
+            h('dl', { class: 'xc-rows xc-quote' },
               row('Amount', h('span', {}, `${formatCents(res.value)} `, unit())),
-              row(kind === 'deposit' ? 'From → to' : 'From → to', kind === 'deposit' ? 'Wallet → market' : 'Market → wallet'),
+              row('From → to', kind === 'deposit' ? 'Wallet → market' : 'Market → wallet'),
               ...after.map(([l, v]) => row(l, h('span', {}, `${formatCents(v)} `, unit())))),
             h('p', { class: 'xc-small xc-muted', text: kind === 'deposit'
               ? `Moves mock tokens into your available market balance. Opening a position locks ${formatCents(ESCROW_CENTS)} ${COLLATERAL}.`
@@ -491,9 +671,8 @@ export function mountExchange(root, handlers = {}) {
   function renderAccount() {
     const b = state.balances;
     const live = Boolean(state.session);
-    for (const k of ['wallet', 'available', 'locked', 'maker']) r.bal[k].textContent = live ? formatCents(b[k]) : '—';
-    r.accountNote.textContent = live ? '' : 'Start a session to load balances.';
-    r.accountNote.hidden = live;
+    for (const k of ['wallet', 'available', 'locked', 'maker']) setText(r.bal[k], live ? formatCents(b[k]) : '—');
+    r.bal.available.classList.toggle('is-warn', live && b.available != null && b.available < ESCROW_CENTS && !slotOccupied());
     const locked = controlsLocked();
     for (const kind of ['deposit', 'withdraw']) {
       const f = r[kind];
@@ -504,11 +683,19 @@ export function mountExchange(root, handlers = {}) {
       f.max.disabled = off;
       f.go.disabled = off || (touched[kind] && !res.ok);
       const msg = touched[kind] && live && !res.ok ? res.reason : '';
-      f.err.textContent = msg;
+      setText(f.err, msg);
       f.input.setAttribute('aria-invalid', msg ? 'true' : 'false');
-      f.go.textContent = pending === (kind === 'deposit' ? 'onDeposit' : 'onWithdraw') ? 'Signing…' : (kind === 'deposit' ? 'Deposit' : 'Withdraw');
+      setText(f.go, pending === (kind === 'deposit' ? 'onDeposit' : 'onWithdraw') ? 'Signing…' : (kind === 'deposit' ? 'Deposit' : 'Withdraw'));
     }
-    r.withdraw.hint.textContent = live && b.locked > 0 ? `${formatCents(b.locked)} ${COLLATERAL} is locked in escrow until the position settles.` : '';
+    const short = live && b.available != null ? Math.max(0, ESCROW_CENTS - b.available) : 0;
+    setText(r.deposit.hint, !live
+      ? 'Balances load after Start session.'
+      : needsEscrow()
+        ? `Each position locks a fixed ${formatCents(ESCROW_CENTS)} ${COLLATERAL} escrow. Deposit at least ${formatCents(short)}.`
+        : `Wallet → available market balance.`);
+    setText(r.withdraw.hint, live && b.locked > 0 ? `${formatCents(b.locked)} ${COLLATERAL} is locked in escrow until the position settles.` : '');
+    r.deposit.go.classList.toggle('xc-btn--act', needsEscrow());
+    r.deposit.go.classList.toggle('xc-btn--ghost', !needsEscrow());
   }
 
   function positionView() {
@@ -546,118 +733,181 @@ export function mountExchange(root, handlers = {}) {
     return h('span', { class: 'xc-hash' }, h('code', { title: String(v), text: shortHash(v, 8, 6) }), copyButton(v, label));
   }
 
+  function explorerLink(rc) {
+    const url = safeHttpUrl(rc?.explorerUrl);
+    return url ? h('a', { class: 'xc-link', href: url, target: '_blank', rel: 'noopener noreferrer', text: 'Explorer', 'aria-label': `Open ${rc.label ?? 'transaction'} in explorer (new tab)` }) : null;
+  }
+
+  function lastReceipt() {
+    const list = state.receipts;
+    return list.length ? list[list.length - 1] : null;
+  }
+
   function renderPosition() {
-    const host = r.tabPanels.position;
     const p = positionView();
     const markUsd = state.oracle ? state.oracle.price_ticks * TICK_USD : null;
-    r.tabs.position.querySelector('.xc-count').textContent = p || state.active ? '1' : '';
+    setText(r.counts.position, p || state.active ? '1' : '');
+    const noWitness = Boolean(state.session && !p && state.active);
+    r.posNoWitness.hidden = !noWitness;
+    r.posActions.hidden = !(state.session && (p || state.active));
+    const rc = lastReceipt();
+    const key = JSON.stringify([
+      Boolean(state.session), p, state.active, markUsd, state.keeperArmed, rc?.hash, rc?.label, rc?.explorerUrl,
+    ]);
+    const focused = r.posBody.contains(document.activeElement);
+    const inFresh = r.posFresh.contains(document.activeElement);
+    const stale = r.posBody.classList.contains('is-stale');
+    // Focus moved into the fresh view itself: hold it too until focus leaves.
+    if (stale && inFresh) return;
+    if (stale && !focused) {
+      // Focus left the earlier details: flush them and show the fresh view in place.
+      r.posBody.classList.remove('is-stale');
+      r.posBody.removeAttribute('aria-hidden');
+      r.posFresh.hidden = true;
+      r.posStaleNote.hidden = true;
+      r.posFresh.replaceChildren();
+      keys.position = null;
+    }
+    if (key === keys.position) return;
+    keys.position = key;
+    // Rebuilding would drop focus from a Copy / Explorer control inside the
+    // details, so render the update above them until focus leaves.
+    const host = focused ? r.posFresh : r.posBody;
+    if (focused) {
+      r.posFresh.hidden = false;
+      r.posStaleNote.hidden = false;
+      r.posBody.classList.add('is-stale');
+    }
     if (!state.session) {
-      host.replaceChildren(h('p', { class: 'xc-empty', text: 'Not connected. Start a session to see your position.' }));
+      host.replaceChildren(h('p', { class: 'xc-empty', text: 'Not connected. Your position appears here after Start session.' }));
       return;
     }
-    if (!p && state.active) {
-      const whyId = `${id}-nowitness`;
+    const evidence = rc ? row('Latest NEAR receipt', h('span', { class: 'xc-hash' },
+      h('span', { class: 'xc-muted', text: `${rc.label ?? 'Transaction'} ` }),
+      rc.hash ? h('code', { title: String(rc.hash), text: shortHash(rc.hash, 6, 4) }) : null,
+      explorerLink(rc))) : null;
+    if (noWitness) {
       host.replaceChildren(
-        h('div', { class: 'xc-empty' },
-          h('p', { text: `An active slot (nonce ${state.active.nonce ?? '—'}) exists on chain, but its private opening is not held in this browser, so size, margin and PnL cannot be shown.` }),
-          h('dl', { class: 'xc-rows' },
-            row('Commitment', state.active.commitment ? hashValue(state.active.commitment, 'commitment') : '—'),
-            row('Keeper', state.keeperArmed ? 'Armed' : 'Not armed', { tone: state.keeperArmed ? 'pos' : null })),
-          h('p', { class: 'xc-notice', id: whyId, text: 'Voluntary close is unavailable here: closing needs a proof built from the private opening, and this browser does not hold it. The designated keepers can still liquidate the slot from their encrypted copy if the mark crosses liquidation.' })),
-        closeBar({ noWitness: true, describedBy: whyId }));
+        h('p', { class: 'xc-muted', text: `An active slot (nonce ${state.active.nonce ?? '—'}) exists on chain, but its private opening is not held in this browser, so size, margin and PnL cannot be shown.` }),
+        h('dl', { class: 'xc-pos__grid' },
+          row('Commitment', state.active.commitment ? hashValue(state.active.commitment, 'commitment') : '—'),
+          row('Keeper B', state.keeperArmed ? 'Armed' : 'Not armed', { tone: state.keeperArmed ? 'pos' : null }),
+          evidence));
       return;
     }
     if (!p) {
-      host.replaceChildren(h('p', { class: 'xc-empty', text: 'No open position. Use the trade form to open an isolated long.' }));
+      host.replaceChildren(h('p', { class: 'xc-empty', text: 'No open position. The order ticket opens one isolated long on this market.' }));
       return;
     }
     const lev = p.entryUsd && p.sizeBtc && p.marginUsd ? (p.entryUsd * p.sizeBtc) / p.marginUsd : null;
     const pnlTone = p.pnlUsd > 0 ? 'pos' : p.pnlUsd < 0 ? 'neg' : null;
     const pnlPct = p.marginUsd ? (p.pnlUsd / p.marginUsd) * 100 : null;
-    const nearLiq = markUsd != null && p.liquidationUsd > 0 && markUsd < p.liquidationUsd;
+    const belowLiq = markUsd != null && p.liquidationUsd > 0 && markUsd < p.liquidationUsd;
     host.replaceChildren(
-      h('div', { class: 'xc-pos' },
-        h('div', { class: 'xc-pos__head' },
-          h('span', { class: 'xc-side-pill__long', text: 'Long' }),
-          h('strong', { text: 'BTC-PERP' }),
-          h('span', { class: 'xc-muted', text: `Isolated · nonce ${p.nonce ?? '—'}` }),
-          nearLiq ? h('span', { class: 'xc-pill is-neg', text: 'Liquidatable at this mark' }) : null),
-        h('dl', { class: 'xc-pos__grid' },
-          row('Size', h('span', {}, `${formatBtc(p.sizeBtc)} `, unit('BTC'))),
-          row('Entry', h('span', {}, `${formatPriceUsd(p.entryUsd)} `, unit('USD'))),
-          row('Mark', h('span', {}, `${formatPriceUsd(markUsd)} `, unit('USD'))),
-          row('Liquidation', h('span', {}, `${formatPriceUsd(p.liquidationUsd)} `, unit('USD')), { tone: 'neg' }),
-          row('Margin', h('span', {}, `${formatAmount(p.marginUsd)} `, unit())),
-          row('Leverage', formatLeverage(lev)),
-          row('Unrealized PnL', h('span', {},
-            `${formatSigned(p.pnlUsd)} `, unit(),
-            pnlPct != null ? h('span', { class: 'xc-muted', text: ` (${formatSigned(pnlPct)}%)` }) : null), { tone: pnlTone }),
-          row('Escrow', h('span', {}, `${formatCents(ESCROW_CENTS)} `, unit())),
-          row('Keeper', state.keeperArmed ? 'Armed' : 'Not armed', { tone: state.keeperArmed ? 'pos' : null }),
-          row('Commitment', p.commitment ? hashValue(p.commitment, 'commitment') : '—'))),
-      closeBar());
+      h('div', { class: 'xc-pos__head' },
+        h('span', { class: 'xc-side', text: 'Long' }),
+        h('strong', { text: 'BTC-PERP' }),
+        h('span', { class: 'xc-muted', text: `Isolated · nonce ${p.nonce ?? '—'}` }),
+        belowLiq ? h('span', { class: 'xc-pill is-neg', text: 'Liquidatable at this mark' }) : null),
+      h('dl', { class: 'xc-pos__grid' },
+        row('Size', h('span', {}, `${formatBtc(p.sizeBtc)} `, unit('BTC'))),
+        row('Entry', h('span', {}, `${formatPriceUsd(p.entryUsd)} `, unit('USD'))),
+        row('Oracle mark', h('span', {}, `${formatPriceUsd(markUsd)} `, unit('USD'))),
+        row('Liquidation', h('span', {}, `${formatPriceUsd(p.liquidationUsd)} `, unit('USD')), { tone: 'neg' }),
+        row('Margin', h('span', {}, `${formatAmount(p.marginUsd)} `, unit())),
+        row('Leverage', formatLeverage(lev)),
+        row('Unrealized PnL', h('span', {},
+          `${formatSigned(p.pnlUsd)} `, unit(),
+          pnlPct != null ? h('span', { class: 'xc-muted', text: ` (${formatSigned(pnlPct)}%)` }) : null), { tone: pnlTone }),
+        row('Escrow', h('span', {}, `${formatCents(ESCROW_CENTS)} `, unit())),
+        row('Keeper B', state.keeperArmed ? 'Armed' : 'Not armed', { tone: state.keeperArmed ? 'pos' : null }),
+        row('Commitment', p.commitment ? hashValue(p.commitment, 'commitment') : '—'),
+        evidence));
   }
 
-  function closeBar({ noWitness = false, describedBy } = {}) {
-    const btn = h('button', {
-      type: 'button', class: 'xc-btn xc-btn--short', 'aria-describedby': describedBy,
-      text: pending === 'onClose' ? 'Closing…' : 'Close position',
+  function renderActionButtons() {
+    const locked = controlsLocked();
+    const p = state.position;
+    const closing = pending === 'onClose' || state.busy === 'Closing position';
+    const arming = pending === 'onArmKeeper' || state.busy === 'Arming Keeper B';
+    for (const btn of [r.posClose, r.nextClose]) {
+      btn.disabled = !p || locked || !has('onClose');
+      setText(btn, closing ? 'Closing…' : 'Close position');
+      if (!p && state.active) btn.setAttribute('aria-describedby', r.posNoWitness.id);
+      else btn.removeAttribute('aria-describedby');
+    }
+    const armOff = !state.session || state.keeperArmed || !(state.active || state.position) || locked || !has('onArmKeeper');
+    for (const btn of [r.posArm, r.nextArm, r.arm]) {
+      btn.disabled = armOff;
+      setText(btn, arming ? 'Arming…' : state.keeperArmed ? 'Keeper B armed' : 'Arm Keeper B');
+    }
+  }
+
+  function requestClose() {
+    if (!state.position || controlsLocked() || !has('onClose')) return;
+    openDialog({
+      title: 'Close position',
+      handler: 'onClose',
+      confirmLabel: 'Sign and close',
+      args: () => [],
+      build: () => {
+        const pv = positionView();
+        const mark = state.oracle ? state.oracle.price_ticks * TICK_USD : null;
+        return {
+          nodes: [
+            h('dl', { class: 'xc-rows xc-quote' },
+              pv ? row('Size', h('span', {}, `${formatBtc(pv.sizeBtc)} `, unit('BTC'))) : null,
+              row('Oracle mark', h('span', {}, `${formatPriceUsd(mark)} `, unit('USD'), h('span', { class: 'xc-muted', text: ` · R${state.oracle?.round ?? '—'}` }))),
+              pv ? row('Est. PnL', h('span', {}, `${formatSigned(pv.pnlUsd)} `, unit()), { tone: pv.pnlUsd > 0 ? 'pos' : pv.pnlUsd < 0 ? 'neg' : null }) : null),
+            h('p', { class: 'xc-small', text: 'Settlement is computed by the market contract at the latest oracle round, including funding. The final refund appears in your available balance and receipts.' }),
+          ],
+          blocked: state.position
+            ? null
+            : state.active
+              ? 'This browser does not hold the private opening for the active slot, so it cannot build a close proof.'
+              : 'No open position.',
+        };
+      },
     });
-    btn.disabled = noWitness || controlsLocked() || !has('onClose');
-    btn.addEventListener('click', () => {
-      if (btn.disabled || !state.position) return;
-      openDialog({
-        title: 'Close position',
-        handler: 'onClose',
-        confirmLabel: 'Sign and close',
-        args: () => [],
-        build: () => {
-          const pv = positionView();
-          const mark = state.oracle ? state.oracle.price_ticks * TICK_USD : null;
-          return {
-            nodes: [
-              h('dl', { class: 'xc-rows' },
-                pv ? row('Size', h('span', {}, `${formatBtc(pv.sizeBtc)} `, unit('BTC'))) : null,
-                row('Mark', h('span', {}, `${formatPriceUsd(mark)} `, unit('USD'), h('span', { class: 'xc-muted', text: ` · R${state.oracle?.round ?? '—'}` }))),
-                pv ? row('Est. PnL', h('span', {}, `${formatSigned(pv.pnlUsd)} `, unit()), { tone: pv.pnlUsd > 0 ? 'pos' : pv.pnlUsd < 0 ? 'neg' : null }) : null),
-              h('p', { class: 'xc-small', text: 'Settlement is computed by the market contract at the latest oracle round, including funding. The final refund appears in your available balance and receipts.' }),
-            ],
-            blocked: state.position
-              ? null
-              : state.active
-                ? 'This browser does not hold the private opening for the active slot, so it cannot build a close proof.'
-                : 'No open position.',
-          };
-        },
-      });
-    });
-    return h('div', { class: 'xc-actions' }, btn);
   }
 
   function renderReceipts() {
     const host = r.tabPanels.receipts;
     const list = state.receipts;
-    r.tabs.receipts.querySelector('.xc-count').textContent = list.length ? String(list.length) : '';
-    if (!list.length) {
-      host.replaceChildren(h('p', { class: 'xc-empty', text: 'No transactions yet. Signed transactions appear here with explorer links.' }));
-      return;
+    setText(r.counts.receipts, list.length ? String(list.length) : '');
+    const items = list.map((rc) => JSON.stringify([rc.label, rc.hash, rc.explorerUrl]));
+    const key = JSON.stringify(items);
+    if (key === keys.receipts) return;
+    const receiptItem = (rc) => h('li', { class: 'xc-receipt' },
+      h('span', { class: 'xc-receipt__label', text: rc.label ?? 'Transaction' }),
+      rc.hash ? hashValue(rc.hash, `${rc.label ?? 'transaction'} hash`) : h('span', { class: 'xc-muted', text: '—' }),
+      explorerLink(rc));
+    if (host.contains(document.activeElement) && document.activeElement !== host) {
+      // A Copy / Explorer control has focus. New receipts are appended to the
+      // log, so add them at the top of the newest-first list without touching
+      // the focused row; anything else waits for focusout.
+      const prev = keys.receiptItems ?? [];
+      const ol = host.querySelector('.xc-receipts');
+      if (!ol || prev.length > items.length || prev.some((k, i) => k !== items[i])) return;
+      for (const rc of list.slice(prev.length)) ol.prepend(receiptItem(rc));
+    } else if (!list.length) {
+      host.replaceChildren(h('p', { class: 'xc-empty', text: 'No transactions yet. Each signed NEAR transaction is listed here with its hash and an explorer link.' }));
+    } else {
+      host.replaceChildren(h('ol', { class: 'xc-receipts', reversed: true }, [...list].reverse().map(receiptItem)));
     }
-    host.replaceChildren(h('ol', { class: 'xc-receipts', reversed: true },
-      [...list].reverse().map((rc) => {
-        const url = safeHttpUrl(rc.explorerUrl);
-        return h('li', { class: 'xc-receipt' },
-          h('span', { class: 'xc-receipt__label', text: rc.label ?? 'Transaction' }),
-          rc.hash ? hashValue(rc.hash, `${rc.label ?? 'transaction'} hash`) : h('span', { class: 'xc-muted', text: '—' }),
-          url ? h('a', { class: 'xc-link', href: url, target: '_blank', rel: 'noopener noreferrer', text: 'Explorer', 'aria-label': `Open ${rc.label ?? 'transaction'} in explorer (new tab)` }) : null);
-      })));
+    keys.receipts = key;
+    keys.receiptItems = items;
   }
 
   function renderRounds() {
     const host = r.tabPanels.rounds;
     const hist = state.markHistory;
-    r.tabs.rounds.querySelector('.xc-count').textContent = hist.length ? String(hist.length) : '';
+    setText(r.counts.rounds, hist.length ? String(hist.length) : '');
+    const key = JSON.stringify(hist.map((p) => [p.round, p.price_ticks]));
+    if (key === keys.rounds) return;
+    keys.rounds = key;
     if (!hist.length) {
-      host.replaceChildren(h('p', { class: 'xc-empty', text: 'No oracle rounds recorded.' }));
+      host.replaceChildren(h('p', { class: 'xc-empty', text: 'No oracle rounds recorded in this browser yet.' }));
       return;
     }
     host.replaceChildren(h('table', { class: 'xc-table' },
@@ -679,9 +929,9 @@ export function mountExchange(root, handlers = {}) {
     const m = parseMarkUsd(r.markField.input.value);
     r.markField.input.disabled = !live || !has('onSetMark');
     r.markGo.disabled = !live || !has('onSetMark') || locked || (touched.mark && !m.ok);
-    r.markGo.textContent = pending === 'onSetMark' ? 'Publishing…' : 'Publish mark';
+    setText(r.markGo, pending === 'onSetMark' ? 'Publishing…' : 'Publish mark');
     const msg = touched.mark && !m.ok ? m.reason : '';
-    r.markField.err.textContent = msg;
+    setText(r.markField.err, msg);
     r.markField.input.setAttribute('aria-invalid', msg ? 'true' : 'false');
     const liq = currentLiqTicks();
     r.markLiq.disabled = !live || !(liq > 1);
@@ -694,71 +944,201 @@ export function mountExchange(root, handlers = {}) {
     } else if (m.ok && state.active && !state.position) {
       effect = 'Health of the active slot is evaluated by the keeper with the private opening.';
     }
-    r.markEffect.textContent = effect;
+    setText(r.markEffect, effect);
     r.markEffect.className = `xc-small ${tone}`;
 
     const armed = state.keeperArmed;
-    r.keeperState.textContent = armed ? 'Armed' : 'Idle';
+    setText(r.keeperState, armed ? 'Armed' : 'Idle');
     r.keeperState.className = `xc-pill ${armed ? 'is-pos' : ''}`;
-    r.keeperNote.textContent = armed
-      ? 'The keeper is watching the active slot and will submit a liquidation proof if the mark crosses liquidation.'
+    setText(r.keeperNote, armed
+      ? 'Keeper B is watching the active slot and will submit a liquidation proof if the mark crosses liquidation.'
       : state.active || state.position
-        ? 'Arm the keeper so it watches this slot and liquidates with a proof when equity drops below maintenance.'
-        : 'Available once a position is open.';
-    r.arm.disabled = !live || armed || !(state.active || state.position) || locked || !has('onArmKeeper');
-    r.arm.textContent = pending === 'onArmKeeper' ? 'Arming…' : armed ? 'Keeper armed' : 'Arm keeper';
+        ? 'Arm Keeper B so it watches this slot and liquidates with a proof when equity drops below maintenance.'
+        : 'Available once a position is open.');
+    setText(r.toolsSummaryNote, `Oracle mark · Keeper B ${armed ? 'armed' : 'idle'}`);
   }
 
   function renderHeader() {
     const o = state.oracle;
-    r.mark.textContent = o ? formatTicks(o.price_ticks) : '—';
-    r.round.textContent = o ? String(o.round) : '—';
-    r.funding.textContent = o && Number.isFinite(o.funding_cents) ? formatCents(o.funding_cents) : '—';
+    setText(r.mark, o ? formatTicks(o.price_ticks) : '—');
+    setText(r.round, o ? String(o.round) : '—');
+    setText(r.funding, o && Number.isFinite(o.funding_cents) ? formatCents(o.funding_cents) : '—');
+    const hist = state.markHistory;
+    if (hist.length >= 2) {
+      const d = (hist[hist.length - 1].price_ticks - hist[0].price_ticks) * TICK_USD;
+      setText(r.change, `${d > 0 ? '+' : d < 0 ? '−' : ''}${Math.abs(d).toLocaleString('en-US')}`);
+    } else setText(r.change, '—');
     const net = state.network;
-    r.networkBadge.textContent = net === 'testnet' ? 'NEAR testnet' : net === 'sandbox' ? 'NEAR sandbox' : 'Offline';
-    r.networkBadge.className = `xc-badge ${net ? `is-${net}` : 'is-off'}`;
+    setText(r.netText, net === 'testnet' ? 'NEAR testnet' : net === 'sandbox' ? 'NEAR sandbox' : 'NEAR testnet · not connected');
+    r.network.className = `xc-tag xc-net ${net ? `is-${net}` : 'is-off'}`;
     const s = state.session;
+    r.who.hidden = !s;
     if (s) {
-      r.session.replaceChildren(
-        h('span', { class: 'xc-dot is-on', 'aria-hidden': 'true' }),
-        h('span', { class: 'xc-session__id', title: `Trader ${s.traderId}\nMarket ${s.marketId}\nToken ${s.tokenId}`, text: s.traderId ?? 'session' }));
-    } else {
-      const btn = h('button', { type: 'button', class: 'xc-btn xc-btn--primary', text: pending === 'onStart' ? 'Starting…' : 'Start session', onclick: () => run('onStart') });
-      btn.disabled = controlsLocked() || !has('onStart');
-      r.session.replaceChildren(btn);
+      setText(r.sessionId, s.traderId ?? 'session');
+      r.sessionId.title = `Trader ${s.traderId ?? '—'}\nMarket ${s.marketId ?? '—'}\nToken ${s.tokenId ?? '—'}`;
+      const c = CUSTODY[s.custody];
+      setText(r.custody, c ? c.short : '');
+      r.custody.title = c ? c.long : '';
+      r.custody.classList.toggle('is-warn', s.custody === 'origin-storage');
     }
   }
 
   function renderStatus() {
     const working = state.busy || (pending ? 'Waiting for confirmation…' : null);
     r.status.classList.toggle('is-busy', Boolean(working));
-    r.statusText.textContent = working
-      ?? (state.session ? (state.oracle ? `Ready · mark round ${state.oracle.round}` : 'Connected · waiting for oracle') : 'Not connected. Start a session to load the market.');
-    r.proof.textContent = state.proofStatus ? `Proof: ${state.proofStatus}` : '';
+    setText(r.statusText, working
+      ?? (state.session ? (state.oracle ? `Ready · oracle round ${state.oracle.round}` : 'Connected · waiting for oracle') : 'Not connected'));
+    setText(r.proof, state.proofStatus ? `Proof: ${state.proofStatus}` : '');
     r.proof.hidden = !state.proofStatus;
+    setText(r.notice, state.notice ?? '');
+    r.notice.hidden = !state.notice;
     const err = state.error || localError;
     r.alert.hidden = !err;
-    r.alertText.textContent = err ?? '';
-    r.alert.querySelector('button').hidden = !localError || Boolean(state.error);
+    setText(r.alertText, err ?? '');
+    r.alertDismiss.hidden = !localError || Boolean(state.error);
     root.setAttribute('aria-busy', working ? 'true' : 'false');
+  }
+
+  function computePhase() {
+    if (!state.session) return 'cold';
+    if (state.position) return 'position';
+    if (state.active) return 'active';
+    if (!state.oracle || state.balances.available == null) return 'wait';
+    if (needsEscrow()) return 'fund';
+    return 'ready';
+  }
+
+  function renderNext() {
+    const next = computePhase();
+    const b = state.balances;
+    const working = state.busy || (pending ? 'Waiting for confirmation…' : null);
+    let title = '';
+    let body = '';
+    switch (next) {
+      case 'cold':
+        title = state.busy === 'Restoring session' ? 'Checking for a saved session'
+          : pending === 'onStart' || state.busy === 'Starting session' ? 'Setting up your session'
+            : 'Start a session to trade';
+        body = `Trade an isolated BTC long on a NEAR testnet market, margined in mock ${COLLATERAL} with no cash value. One click sets up a trader account for this browser. Deposits, opens and closes show a review before you sign.`;
+        break;
+      case 'wait':
+        title = 'Loading market';
+        body = 'Waiting for the oracle mark and your balances from NEAR.';
+        break;
+      case 'fund':
+        title = `Deposit ${formatCents(ESCROW_CENTS)} ${COLLATERAL} escrow`;
+        body = `Every position locks a fixed ${formatCents(ESCROW_CENTS)} ${COLLATERAL} escrow from your available balance. Available: ${formatCents(b.available)} · wallet: ${formatCents(b.wallet)}. Use Deposit below.`;
+        break;
+      case 'ready':
+        title = 'Ready · review your long';
+        body = `${formatCents(b.available)} ${COLLATERAL} available. Set size and margin, then review the quote before signing.`;
+        break;
+      case 'position': {
+        const p = positionView();
+        title = 'Position open';
+        body = `Long ${formatBtc(p?.sizeBtc)} BTC from ${formatPriceUsd(p?.entryUsd)} USD · est. liquidation ${formatPriceUsd(p?.liquidationUsd)} USD. Keeper B ${state.keeperArmed ? 'is armed: publish a test mark below liquidation to see it act.' : 'is not armed.'}`;
+        break;
+      }
+      case 'active':
+        title = 'Active slot without its opening';
+        body = 'This browser does not hold the private opening for the slot on chain, so it cannot close it. Details are under Positions.';
+        break;
+      default:
+    }
+    setText(r.nextTitle, title);
+    const workingText = working ? `${working.replace(/…$/, '')}…${state.proofStatus ? ` Proof: ${state.proofStatus}` : ''}` : null;
+    setText(r.nextBody, workingText ?? body);
+    r.next.classList.toggle('is-busy', Boolean(working));
+    r.ticket.dataset.phase = next;
+
+    // Progress reflects observed state only.
+    const done = {
+      session: Boolean(state.session),
+      escrow: Boolean(state.session) && (slotOccupied() || (b.available != null && b.available >= ESCROW_CENTS)),
+      open: slotOccupied(),
+    };
+    const current = !done.session ? 'session' : !done.escrow ? 'escrow' : !done.open ? 'open' : null;
+    for (const [k] of stepDefs) {
+      const li = r.steps[k];
+      li.classList.toggle('is-done', done[k]);
+      li.classList.toggle('is-current', current === k);
+      if (current === k) li.setAttribute('aria-current', 'step'); else li.removeAttribute('aria-current');
+      setText(li.lastChild, done[k] ? ' (done)' : current === k ? ' (current)' : '');
+    }
+
+    r.startBtn.hidden = next !== 'cold';
+    r.startNote.hidden = next !== 'cold';
+    r.startBtn.disabled = controlsLocked() || !has('onStart');
+    setText(r.startBtn, pending === 'onStart' || state.busy === 'Starting session' ? 'Starting…' : 'Start session');
+    r.nextClose.hidden = next !== 'position';
+    r.nextArm.hidden = !(next === 'position' || next === 'active') || state.keeperArmed;
+    r.nextMark.hidden = !(next === 'position' || next === 'active') || !state.keeperArmed || !has('onSetMark');
+    r.nextMark.disabled = controlsLocked();
+    r.nextActions.hidden = r.startBtn.hidden && r.nextClose.hidden && r.nextArm.hidden && r.nextMark.hidden;
+    orderTicket(next);
+
+    const rc = (next === 'position' || next === 'active' || next === 'ready' || next === 'fund') ? lastReceipt() : null;
+    const url = safeHttpUrl(rc?.explorerUrl);
+    r.nextEvidence.hidden = !rc;
+    if (rc) {
+      setText(r.nextLinkLabel, `Last NEAR receipt: ${rc.label ?? 'transaction'} · ${shortHash(rc.hash, 6, 4)}`);
+      r.nextLink.hidden = !url;
+      if (url && r.nextLink.getAttribute('href') !== url) r.nextLink.href = url;
+      r.nextLink.setAttribute('aria-label', `Open ${rc.label ?? 'transaction'} in explorer (new tab)`);
+    }
+
+    // Open the collateral section's deposit path when escrow is short; only on
+    // the transition, so a user's own toggling is never overridden by polling.
+    if (next !== phase) {
+      if (next === 'fund' && !touched.deposit && !r.deposit.input.value && b.available != null && b.wallet != null) {
+        const need = Math.min(ESCROW_CENTS - b.available, b.wallet);
+        if (need > 0) r.deposit.input.value = centsToString(need);
+      }
+      if (next === 'fund') r.transferBox.open = true;
+      else if (phase === 'fund') {
+        // Escrow is covered: fold transfers behind the balance row and, if the
+        // deposit just made had focus, land it on the ready action.
+        const hadFocus = r.transferBox.contains(document.activeElement);
+        r.transferBox.open = false;
+        // After this render pass, so Review long's enabled state is current.
+        if (hadFocus) later(() => (next === 'ready' && !r.review.disabled ? r.review : r.nextTitle).focus());
+      }
+      phase = next;
+    }
+  }
+
+  // Cold: only the start step. Funding: Deposit leads. Otherwise the order
+  // (or the open position's actions) leads and collateral is a compact row.
+  function orderTicket(next) {
+    r.fund.hidden = next === 'cold';
+    r.form.hidden = next === 'cold' || next === 'position' || next === 'active';
+    r.tools.hidden = next === 'cold';
+    const want = next === 'fund' || next === 'wait'
+      ? [r.next, r.fund, r.form, r.tools]
+      : [r.next, r.form, r.fund, r.tools];
+    const kids = [...r.ticket.children];
+    if (want.every((el, i) => kids[i] === el)) return;
+    const active = document.activeElement;
+    r.ticket.append(...want);
+    if (active && active !== document.activeElement && root.contains(active)) active.focus({ preventScroll: true });
   }
 
   function renderChart() {
     const p = positionView();
     const hist = state.markHistory;
+    r.chartCard.classList.toggle('is-empty', hist.length === 0);
     chart.update({
       history: hist,
       entryTicks: p && Number.isFinite(p.entryUsd) ? p.entryUsd / TICK_USD : null,
       liqTicks: p && Number.isFinite(p.liquidationUsd) && p.liquidationUsd > 0 ? p.liquidationUsd / TICK_USD : null,
+      emptyText: state.session
+        ? 'No oracle rounds recorded in this browser yet. Rounds appear as the market contract publishes them.'
+        : 'Oracle marks load after Start session. This chart plots only rounds published to the market contract; there is no external price feed.',
     });
     if (hist.length >= 2) {
       const d = (hist[hist.length - 1].price_ticks - hist[0].price_ticks) * TICK_USD;
-      r.chartLast.textContent = `${hist.length} rounds · ${d >= 0 ? '+' : '−'}${Math.abs(d).toLocaleString('en-US')} USD`;
-      r.chartLast.className = `xc-panel__meta ${d > 0 ? 'is-pos' : d < 0 ? 'is-neg' : ''}`;
-    } else {
-      r.chartLast.textContent = hist.length ? '1 round' : '';
-      r.chartLast.className = 'xc-panel__meta';
-    }
+      setText(r.chartMeta, `${hist.length} rounds · ${d >= 0 ? '+' : '−'}${Math.abs(d).toLocaleString('en-US')} USD`);
+    } else setText(r.chartMeta, hist.length ? '1 round' : '');
   }
 
   // ---------- dialog lifecycle ----------
@@ -779,12 +1159,13 @@ export function mountExchange(root, handlers = {}) {
   }
   function renderDialog() {
     if (!dialogSpec) return;
-    r.dlgTitle.textContent = dialogSpec.title;
+    setText(r.dlgTitle, dialogSpec.title);
     const { nodes, blocked } = dialogSpec.build();
-    r.dlgBody.replaceChildren(...nodes, blocked ? h('p', { class: 'xc-blocker', text: blocked }) : null);
+    // replaceChildren stringifies null, so drop empty slots explicitly.
+    r.dlgBody.replaceChildren(...[...nodes, blocked ? h('p', { class: 'xc-blocker', text: blocked }) : null].filter(Boolean));
     const stale = dialogSpec.ackRound !== undefined && dialogSpec.ackRound !== (state.oracle?.round ?? null);
-    r.dlgConfirm.textContent = stale ? `Confirm at round ${state.oracle?.round}` : dialogSpec.confirmLabel;
-    r.dlgConfirm.className = `xc-btn ${dialogSpec.handler === 'onClose' ? 'xc-btn--short' : 'xc-btn--long'}`;
+    setText(r.dlgConfirm, stale ? `Confirm at round ${state.oracle?.round}` : dialogSpec.confirmLabel);
+    r.dlgConfirm.className = `xc-btn ${dialogSpec.handler === 'onClose' ? 'xc-btn--risk' : 'xc-btn--act'}`;
     r.dlgConfirm.disabled = Boolean(blocked) || controlsLocked() || !has(dialogSpec.handler);
   }
 
@@ -792,9 +1173,11 @@ export function mountExchange(root, handlers = {}) {
     renderHeader();
     renderStatus();
     renderChart();
+    renderNext();
     renderForm();
     renderAccount();
     renderPosition();
+    renderActionButtons();
     renderReceipts();
     renderRounds();
     renderTest();

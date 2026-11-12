@@ -23,17 +23,17 @@ function readTheme(el) {
   const cs = getComputedStyle(el);
   const v = (name, fallback) => cs.getPropertyValue(name).trim() || fallback;
   return {
-    grid: v('--chart-grid', '#1d2738'),
-    text: v('--chart-text', '#94a3b8'),
-    strong: v('--chart-strong', '#f1f5f9'),
-    line: v('--chart-line', '#00ffff'),
-    tagFill: v('--chart-tag-fill', 'rgba(0,255,255,0.14)'),
-    tagStroke: v('--chart-tag-stroke', 'rgba(0,255,255,0.5)'),
-    entry: v('--chart-entry', '#94a3b8'),
-    liq: v('--chart-liq', '#ef5a76'),
-    cross: v('--chart-cross', '#2c3a52'),
-    halo: v('--chart-halo', '#0f1420'),
-    font: v('--chart-font', 'monospace'),
+    grid: v('--chart-grid', '#223044'),
+    text: v('--chart-text', '#a4b4c9'),
+    strong: v('--chart-strong', '#edf3fc'),
+    line: v('--chart-line', '#70ddd0'),
+    tagFill: v('--chart-tag-fill', 'rgba(112,221,208,0.14)'),
+    tagStroke: v('--chart-tag-stroke', 'rgba(112,221,208,0.55)'),
+    entry: v('--chart-entry', '#a4b4c9'),
+    liq: v('--chart-liq', '#ff8f86'),
+    cross: v('--chart-cross', '#3a4d66'),
+    halo: v('--chart-halo', '#172230'),
+    font: v('--chart-font', 'system-ui, sans-serif'),
   };
 }
 
@@ -58,7 +58,7 @@ export function createMarkChart(host) {
   wrap.append(plot, tip, empty, live);
   host.append(wrap);
 
-  let data = { history: [], entryTicks: null, liqTicks: null };
+  let data = { history: [], entryTicks: null, liqTicks: null, emptyText: null };
   let cursor = null;
   let geom = null;
 
@@ -71,7 +71,7 @@ export function createMarkChart(host) {
   function layout() {
     const pts = data.history;
     const W = Math.max(280, wrap.clientWidth || 600);
-    const H = Math.max(180, wrap.clientHeight || 300);
+    const H = Math.max(140, wrap.clientHeight || 300);
     const prices = pts.map((p) => p.price_ticks * TICK_USD);
     const refs = [data.entryTicks, data.liqTicks].filter((t) => t > 0).map((t) => t * TICK_USD);
     let lo = Math.min(...prices, ...refs);
@@ -93,7 +93,7 @@ export function createMarkChart(host) {
     plot.hidden = !has;
     empty.hidden = has;
     if (!has) {
-      empty.textContent = 'No oracle rounds yet. The chart only plots marks published to the market contract.';
+      empty.textContent = data.emptyText || 'No oracle rounds yet. The chart only plots marks published to the market contract.';
       tip.hidden = true;
       live.textContent = '';
       geom = null;
@@ -120,10 +120,12 @@ export function createMarkChart(host) {
     ctx.strokeStyle = t.grid;
     ctx.fillStyle = t.text;
     ctx.textAlign = 'left';
+    // Axis labels give way to the last-price tag drawn below.
+    const tagY = yAt(prices[n - 1]);
     for (let v = lo; v <= hi + 1e-9; v += step) {
       const y = crisp(yAt(v));
       ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x1, y); ctx.stroke();
-      ctx.fillText(INT.format(v), x1 + 8, y + 4);
+      if (Math.abs(y - tagY) >= 16) ctx.fillText(INT.format(v), x1 + 8, y + 4);
     }
     ctx.fillText(`R${pts[0].round}`, x0, H - 8);
     if (n > 1) { ctx.textAlign = 'right'; ctx.fillText(`R${pts[n - 1].round}`, x1, H - 8); }
@@ -252,6 +254,7 @@ export function createMarkChart(host) {
         history: next.history ?? [],
         entryTicks: next.entryTicks ?? null,
         liqTicks: next.liqTicks ?? null,
+        emptyText: next.emptyText ?? null,
       };
       if (cursor != null && cursor >= data.history.length) cursor = null;
       draw();

@@ -143,6 +143,7 @@ export function normalizeState(s = {}) {
     network: s.network === 'testnet' ? 'testnet' : s.network === 'sandbox' ? 'sandbox' : null,
     busy: s.busy || null,
     error: s.error || null,
+    notice: typeof s.notice === 'string' && s.notice ? s.notice : null,
     session: s.session ?? null,
     oracle: s.oracle && isNum(s.oracle.price_ticks) ? s.oracle : null,
     balances: {
