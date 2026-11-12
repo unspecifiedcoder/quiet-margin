@@ -9,7 +9,6 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufReader, BufWriter, Write};
 use std::path::Path;
-use std::time::Instant;
 
 use ark_bls12_381::{Bls12_381, Fr};
 use ark_groth16::{Groth16, Proof, ProvingKey, VerifyingKey};
@@ -257,15 +256,56 @@ pub fn load_pk(dir: &Path, name: &str) -> Result<ProvingKey<Bls12_381>, Error> {
         .map_err(|e| Error::Key(format!("cannot decode {}: {e}", path.display())))
 }
 
+/// Wall-clock timing for `proving_ms`. `std::time::Instant` panics on
+/// `wasm32-unknown-unknown`, so the browser build reads the JS clock
+/// (`performance.now()`, available in windows and web workers).
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+mod clock {
+    pub struct Start(std::time::Instant);
+
+    pub fn start() -> Start {
+        Start(std::time::Instant::now())
+    }
+
+    impl Start {
+        pub fn elapsed_ms(&self) -> u64 {
+            self.0.elapsed().as_millis() as u64
+        }
+    }
+}
+
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+mod clock {
+    use wasm_bindgen::prelude::*;
+
+    #[wasm_bindgen(inline_js = "export function xythum_now_ms() {         const p = globalThis.performance;         return p && typeof p.now === 'function' ? p.now() : Date.now(); }")]
+    extern "C" {
+        fn xythum_now_ms() -> f64;
+    }
+
+    pub struct Start(f64);
+
+    pub fn start() -> Start {
+        Start(xythum_now_ms())
+    }
+
+    impl Start {
+        pub fn elapsed_ms(&self) -> u64 {
+            let d = xythum_now_ms() - self.0;
+            if d.is_finite() && d > 0.0 { d as u64 } else { 0 }
+        }
+    }
+}
+
 fn timed_prove<C: ConstraintSynthesizer<Fr>>(
     pk: &ProvingKey<Bls12_381>,
     circuit: C,
     inputs: &[[u8; 32]],
 ) -> Result<(Vec<u8>, u64), Error> {
-    let start = Instant::now();
+    let start = clock::start();
     let proof = Groth16::<Bls12_381>::prove(pk, circuit, &mut OsRng)
         .map_err(|e| Error::Proof(e.to_string()))?;
-    let proving_ms = start.elapsed().as_millis() as u64;
+    let proving_ms = start.elapsed_ms();
     self_check(&pk.vk, inputs, &proof)?;
     Ok((proof_bytes(&proof), proving_ms))
 }
@@ -356,6 +396,18 @@ fn self_check(
     inputs: &[[u8; 32]],
     proof: &Proof<Bls12_381>,
 ) -> Result<(), Error> {
+    // Proving keys are decoded without subgroup checks; never emit a proof
+    // whose points are outside the prime-order groups.
+    let in_groups = [proof.a, proof.c]
+        .iter()
+        .all(|p| p.is_on_curve() && p.is_in_correct_subgroup_assuming_on_curve())
+        && proof.b.is_on_curve()
+        && proof.b.is_in_correct_subgroup_assuming_on_curve();
+    if !in_groups {
+        return Err(Error::Proof(
+            "generated proof has points outside the prime-order groups".into(),
+        ));
+    }
     let ok = Groth16::<Bls12_381>::verify(vk, &scalars_to_fr(inputs), proof)
         .map_err(|e| Error::Proof(e.to_string()))?;
     if ok {

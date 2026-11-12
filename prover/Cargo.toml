@@ -5,6 +5,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.95"
 publish = false
+default-run = "xythum-prover"
 
 [lib]
 name = "xythum_prover"
@@ -13,6 +14,11 @@ path = "src/lib.rs"
 [[bin]]
 name = "xythum-prover"
 path = "src/main.rs"
+
+# Operator tool: compressed proving-key exports for browser download.
+[[bin]]
+name = "xythum-browser-keys"
+path = "browser/keys.rs"
 
 [dependencies]
 ark-bls12-381 = { version = "=0.5.0", default-features = false, features = ["curve"] }
@@ -30,6 +36,14 @@ rand = { version = "=0.8.5", default-features = false, features = ["std", "getra
 serde = { version = "=1.0.228", features = ["derive"] }
 serde_json = "=1.0.145"
 sha2 = "=0.10.9"
+
+# Browser build (`browser/build.ps1`, `browser/build.sh`): wasm-bindgen
+# exports, the JS clock, and crypto.getRandomValues for OsRng. The CLI's
+# native dependency graph is unchanged.
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+getrandom = { version = "=0.2.17", features = ["js"] }
+js-sys = "=0.3.107"
+wasm-bindgen = "=0.2.130"
 
 [dev-dependencies]
 # Used only to execute ../src/verifier.rs against the nearcore NEP-488 host

@@ -11,6 +11,7 @@
 //! was copied. Encodings were checked against nearcore's `near-vm-runner`.
 
 pub mod api;
+pub mod browser;
 pub mod circuit;
 pub mod cli;
 pub mod encoding;
