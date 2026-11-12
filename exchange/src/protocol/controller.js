@@ -30,6 +30,10 @@ const MAX_MARKS = 200;
 const MAX_RECEIPTS = 100;
 /** Refresh the oracle before staging when it is older than this. */
 const STAGE_FRESHNESS_BLOCKS = 600;
+/** Oracle validity a close proof must still have at the final height after proving. */
+const CLOSE_MARGIN_BLOCKS = 30;
+/** Prove-and-send attempts for one close while the oracle round moves. */
+const CLOSE_ATTEMPTS = 3;
 /** Required remaining quote validity before submitting `open`. */
 const QUOTE_MARGIN_BLOCKS = 20;
 const POLL_MS = 8_000;
@@ -507,6 +511,30 @@ export class ExchangeController {
     return final;
   }
 
+  /**
+   * Finalized chain state whose oracle is at most `maxAge` blocks old. A
+   * sufficiently fresh final oracle is used as it is; an old one is renewed
+   * through the server's liveness refresh (same price and funding under a
+   * new round, outside the user mark quota), never through a test mark.
+   */
+  async freshChain(chain = null, maxAge = STAGE_FRESHNESS_BLOCKS) {
+    chain ??= await this.refresh();
+    if (!chain.oracle) throw new Error('no oracle mark yet; publish a test mark first');
+    if (chain.height - chain.oracle.height <= maxAge) return chain;
+    this.progress('Refreshing the stale oracle round');
+    const { oracle, receipt } = await this.api.refreshOracle();
+    if (receipt) await this.verifyServerReceipt(receipt, this.ctx.config.oracle_id, 'publish_oracle');
+    await this.waitFor('oracle round ' + oracle.round, async () => {
+      const o = await this.ctx.rpc.view(this.ctx.session.market_id, 'get_oracle');
+      return o && o.round >= oracle.round ? o : null;
+    });
+    chain = await this.refresh();
+    if (!chain.oracle || chain.height - chain.oracle.height > maxAge) {
+      throw new Error('the finalized oracle is still stale after a liveness refresh; try again shortly');
+    }
+    return chain;
+  }
+
   onArmKeeper() {
     return this.run('Arming Keeper B', async () => {
       const { active } = await this.refresh();
@@ -731,12 +759,8 @@ export class ExchangeController {
 
     if (!record) {
       // Stage against a fresh round so the opening survives proving time.
-      if (!chain.oracle || chain.height - chain.oracle.height > STAGE_FRESHNESS_BLOCKS) {
-        if (!chain.oracle) throw new Error('no oracle mark yet; publish a test mark first');
-        this.progress('Requesting a fresh oracle round');
-        await this.publishMark(chain.oracle.price_ticks);
-        chain = await this.refresh();
-      }
+      chain = await this.freshChain(chain);
+      this.assertCanOpen(chain);
       record = await this.prepareOpening(chain, lots, margin);
     }
 
@@ -917,14 +941,19 @@ export class ExchangeController {
       throw new Error('this browser does not hold the secret opening of the active position');
     }
     const w = record.witness;
+    // Every attempt closes exactly this slot; nothing else is ever proven or sent.
+    const { nonce, commitment, funding_checkpoint: checkpoint } = active;
 
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      this.progress('Requesting a fresh oracle round for close');
-      await this.publishMark(chain.oracle.price_ticks);
-      chain = await this.refresh();
+    for (let attempt = 0; attempt < CLOSE_ATTEMPTS; attempt += 1) {
+      this.progress('Checking the oracle round for close');
+      chain = await this.freshChain(attempt === 0 ? chain : null);
       if (!chain.active) throw new Error('the position was settled before close (keeper liquidation)');
+      if (chain.active.nonce !== nonce || chain.active.commitment !== commitment
+        || chain.active.funding_checkpoint !== checkpoint) {
+        throw new Error('the active position changed during close; nothing was sent');
+      }
       const o = chain.oracle;
-      const delta = o.funding_cents - active.funding_checkpoint;
+      const delta = o.funding_cents - checkpoint;
       if (delta < 0 || delta > M.MAX_FUNDING_DELTA_CENTS) throw new Error('funding delta is outside 0..=200');
       const expected = M.settlement('close', w, o.price_ticks, delta);
       const l = chain.ledger;
@@ -935,23 +964,27 @@ export class ExchangeController {
       const out = await this.prover.prove('close', this.ctx.vk.close, {
         ...w, round: o.round, price_ticks: o.price_ticks, funding_cents: delta,
       }, (s) => this.progress(s));
-      if (out.commitment !== active.commitment || out.refund !== expected.refund || out.bad_debt !== expected.bad_debt) {
+      if (out.commitment !== commitment || out.refund !== expected.refund || out.bad_debt !== expected.bad_debt) {
         throw new Error('the close proof output does not match the local settlement model');
       }
-      const latest = await this.ctx.rpc.view(this.ctx.session.market_id, 'get_oracle');
-      if (latest.round !== o.round) continue; // a new mark landed while proving
-      if (chain.height - o.height > M.ORACLE_FRESHNESS_BLOCKS - 30) continue;
+      // Proving takes time: the round must still be current and still fresh
+      // at the final height reached now, not at the height read before proving.
+      const [latest, block] = await Promise.all([
+        this.ctx.rpc.view(this.ctx.session.market_id, 'get_oracle'), this.ctx.rpc.finalBlock(),
+      ]);
+      if (!latest || latest.round !== o.round) continue; // a new round landed while proving
+      if (block.header.height - o.height > M.ORACLE_FRESHNESS_BLOCKS - CLOSE_MARGIN_BLOCKS) continue;
 
       this.progress('Closing on chain');
       const before = chain.ledger.trader_available;
       let result;
       try {
         result = await this.ctx.chain.call('close', this.ctx.session.market_id, [functionCall('close', {
-          nonce: active.nonce, root: active.commitment, round: o.round,
+          nonce, root: commitment, round: o.round,
           refund: out.refund, bad_debt: out.bad_debt, proof: out.proof,
         })]);
       } catch (error) {
-        if (error instanceof TxFailedError && error.reason === 'ERR_ROUND_MISMATCH') continue;
+        if (error instanceof TxFailedError && ['ERR_ROUND_MISMATCH', 'ERR_ORACLE_STALE'].includes(error.reason)) continue;
         if (error instanceof TxFailedError && error.reason === 'ERR_NO_ACTIVE') {
           throw new Error('Keeper B settled the position first; the close was refused on chain');
         }
@@ -961,10 +994,10 @@ export class ExchangeController {
       if (chain.active) throw new Error(`close ${result.hash} finalized but the position is still active`);
       await this.store.delete(OPENING);
       // The trader settled this slot; Keeper B will report no liquidation for it.
-      if ((await this.keeperRecord())?.nonce === active.nonce) await this.store.delete(KEEPER);
+      if ((await this.keeperRecord())?.nonce === nonce) await this.store.delete(KEEPER);
       this.state = {
         ...this.state,
-        notice: `Closed nonce ${active.nonce}: refund ${usd(out.refund)} mUSDC`
+        notice: `Closed nonce ${nonce}: refund ${usd(out.refund)} mUSDC`
           + ` (available ${usd(before)} → ${usd(chain.ledger.trader_available)})`,
       };
       return;

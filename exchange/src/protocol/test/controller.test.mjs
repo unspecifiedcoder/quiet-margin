@@ -370,6 +370,155 @@ test('a coordinator view for another session or a forged liquidation receipt cha
   assert.equal(receiptFor(last(), unknown)?.label, 'liquidation_1 (failed on-chain verification)');
 });
 
+// ------------------------------------------------------- oracle liveness
+
+const routeBodies = (w, route) => w.serverBodies.filter((b) => b.route === route);
+const marks = (w) => routeBodies(w, 'POST /session/mark').length;
+const refreshes = (w) => routeBodies(w, 'POST /session/refresh');
+const oraclePublishes = (w) => w.calls.filter((c) => c.signer === IDS.oracle && c.method === 'publish_oracle');
+const closeJobs = (world) => world.prover.jobs.filter((j) => j.kind === 'close');
+
+/** Deposits and opens 0.01 BTC at 100,000, then forbids every further user test mark. */
+async function openWithoutMarks(world) {
+  const c = await started(world);
+  assert.equal(await c.controller.onSetMark(100_000), true, c.last().error);
+  assert.equal(await c.controller.onDeposit(600), true, c.last().error);
+  assert.equal(await c.controller.onOpen({ sizeBtc: 0.01, marginUsd: 500 }), true, c.last().error);
+  world.w.markQuota = 0;
+  return { ...c, marksBefore: marks(world.w), active: c.last().active };
+}
+
+test('close with a fresh final oracle uses it directly, even with the mark quota exhausted', async () => {
+  const world = await createWorld();
+  const { w } = world;
+  const { controller, last, marksBefore, active } = await openWithoutMarks(world);
+  assert.equal(await controller.onSetMark(110_000), false, 'quota is exhausted');
+  assert.match(last().error, /quota exhausted/);
+  const publishes = oraclePublishes(w).length;
+
+  assert.equal(await controller.onClose(), true, last().error);
+  assert.equal(marks(w), marksBefore + 1, 'only the refused user mark, none from close');
+  assert.equal(refreshes(w).length, 0, 'a fresh oracle needs no refresh');
+  assert.equal(oraclePublishes(w).length, publishes);
+  assert.equal(last().active, null);
+  const [close] = w.calls.filter((c) => c.method === 'close');
+  assert.deepEqual([close.args.nonce, close.args.root], [active.nonce, active.commitment]);
+});
+
+test('a stale oracle is refreshed at the same price for close during a mark cooldown', async () => {
+  const world = await createWorld();
+  const { w } = world;
+  const { controller, last, marksBefore } = await openWithoutMarks(world);
+  w.markQuota = Infinity;
+  w.markCooldown = true;
+  const before = { ...w.oracle };
+  w.height += 700; // older than the staging threshold, still valid on chain
+
+  assert.equal(await controller.onClose(), true, last().error);
+  assert.equal(marks(w), marksBefore, 'close never calls the user test mark');
+  const sent = refreshes(w);
+  assert.equal(sent.length, 1);
+  assert.deepEqual(sent[0].body, {});
+  assert.deepEqual(Object.keys(sent[0].body), []);
+  assert.equal(sent[0].headers.authorization, 'Bearer ' + world.session.id);
+  const refresh = oraclePublishes(w).at(-1);
+  assert.deepEqual([refresh.args.price_ticks, refresh.args.funding_cents], [before.price_ticks, before.funding_cents]);
+  assert.ok(refresh.args.round > before.round);
+  assert.equal(closeJobs(world).length, 1);
+  assert.equal(closeJobs(world)[0].input.round, refresh.args.round);
+  assert.ok(last().receipts.some((r) => r.label === 'oracle refresh'), 'verified on chain');
+  assert.equal(last().active, null);
+});
+
+test('a stale oracle is refreshed at the same price for open without a user mark', async () => {
+  const world = await createWorld();
+  const { w } = world;
+  const { controller, last } = await started(world);
+  assert.equal(await controller.onSetMark(100_000), true, last().error);
+  assert.equal(await controller.onDeposit(600), true, last().error);
+  w.markQuota = 0;
+  const marksBefore = marks(w);
+  w.height += 700;
+  assert.equal(await controller.onOpen({ sizeBtc: 0.01, marginUsd: 500 }), true, last().error);
+  assert.equal(marks(w), marksBefore);
+  assert.equal(refreshes(w).length, 1);
+  assert.equal(oraclePublishes(w).at(-1).args.price_ticks, 10_000);
+  assert.equal(last().position.entryUsd, 100_000);
+  assert.deepEqual(methodsCalled(w, IDS.trader), ['ft_transfer_call', 'stage_position', 'open']);
+});
+
+test('close retries a round that changed while proving, without a user mark, for the same slot', async () => {
+  const world = await createWorld();
+  const { w } = world;
+  const { controller, last, marksBefore, active } = await openWithoutMarks(world);
+  let moves = 1;
+  w.hooks.prove = async (kind) => {
+    // Another oracle round lands while the browser proves (same slot stays active).
+    if (kind === 'close' && moves-- > 0) w.oracle = { ...w.oracle, round: w.oracle.round + 1, height: w.height };
+  };
+  assert.equal(await controller.onClose(), true, last().error);
+  const jobs = closeJobs(world);
+  assert.equal(jobs.length, 2);
+  assert.equal(jobs[1].input.round, jobs[0].input.round + 1);
+  assert.ok(jobs.every((j) => j.input.blinder === jobs[0].input.blinder && j.input.context === jobs[0].input.context));
+  const closes = w.calls.filter((c) => c.method === 'close');
+  assert.equal(closes.length, 1);
+  assert.deepEqual([closes[0].args.nonce, closes[0].args.root, closes[0].args.round],
+    [active.nonce, active.commitment, jobs[1].input.round]);
+  assert.equal(marks(w), marksBefore);
+  assert.equal(refreshes(w).length, 0, 'the new round is fresh');
+});
+
+test('close rechecks oracle age at the final height after proving and refreshes instead of sending', async () => {
+  const world = await createWorld();
+  const { w } = world;
+  const { controller, last, marksBefore } = await openWithoutMarks(world);
+  let slow = 1;
+  w.hooks.prove = async (kind) => {
+    if (kind === 'close' && slow-- > 0) w.height += 995; // proving outlived the round
+  };
+  assert.equal(await controller.onClose(), true, last().error);
+  assert.equal(closeJobs(world).length, 2);
+  assert.equal(refreshes(w).length, 1);
+  assert.equal(marks(w), marksBefore);
+  const closes = w.calls.filter((c) => c.method === 'close');
+  assert.equal(closes.length, 1, 'the stale proof was never sent');
+  assert.equal(closes[0].args.round, closeJobs(world)[1].input.round);
+  assert.equal(last().active, null);
+});
+
+test('close never proves or sends for a slot other than the one it started with', async () => {
+  const world = await createWorld();
+  const { w } = world;
+  const { controller, last } = await openWithoutMarks(world);
+  w.hooks.prove = async (kind) => {
+    if (kind === 'close') {
+      w.hooks.prove = null;
+      w.oracle = { ...w.oracle, round: w.oracle.round + 1, height: w.height };
+      w.active = { ...w.active, commitment: toBase64(new Uint8Array(32).fill(4)) };
+    }
+  };
+  assert.equal(await controller.onClose(), false);
+  assert.match(last().error, /active position changed during close/);
+  assert.equal(closeJobs(world).length, 1);
+  assert.equal(w.calls.filter((c) => c.method === 'close').length, 0);
+});
+
+test('a refresh receipt that is not an oracle publish on this market is refused', async () => {
+  const world = await createWorld();
+  const { w } = world;
+  const { controller, last } = await openWithoutMarks(world);
+  const makerHash = last().receipts.find((r) => r.label === 'maker approval').hash;
+  w.hooks.api = async (route) => (route === 'POST /session/refresh'
+    ? new Response(JSON.stringify({ oracle: { ...w.oracle }, receipt: { label: 'oracle refresh', hash: makerHash } }), { status: 200 })
+    : null);
+  w.height += 700;
+  assert.equal(await controller.onClose(), false);
+  assert.match(last().error, /unexpected signer|not publish_oracle/);
+  assert.equal(closeJobs(world).length, 0);
+  assert.ok(last().active, 'nothing was sent');
+});
+
 test('route and config mismatches are refused before any signing', async () => {
   for (const [patch, pattern] of [
     [{ rpc_url: 'https://rpc.testnet.near.org' }, /pinned testnet RPC/],

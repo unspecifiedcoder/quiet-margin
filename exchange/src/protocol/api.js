@@ -54,6 +54,13 @@ export function parseReceipt(value, where) {
   return { label: value.label, hash: value.hash };
 }
 
+function parseOracle(o, where) {
+  if (!o || !Number.isSafeInteger(o.round) || !Number.isSafeInteger(o.price_ticks)) {
+    throw new ApiError(where + ': malformed oracle');
+  }
+  return o;
+}
+
 export function parseSession(body) {
   const fail = (what) => {
     throw new ApiError('session response: ' + what);
@@ -168,13 +175,23 @@ export class Api {
     return { acknowledgments: [...acks], receipt: parseReceipt(body.receipt, 'approve') };
   }
 
+  /** User test mark: capped and rate limited by the server. */
   async mark(priceTicks) {
     const body = await this.request('POST', '/session/mark', { price_ticks: priceTicks });
-    const o = body.oracle;
-    if (!o || !Number.isSafeInteger(o.round) || !Number.isSafeInteger(o.price_ticks)) {
-      throw new ApiError('mark: malformed oracle');
-    }
-    return { oracle: o, receipt: parseReceipt(body.receipt, 'mark') };
+    return { oracle: parseOracle(body.oracle, 'mark'), receipt: parseReceipt(body.receipt, 'mark') };
+  }
+
+  /**
+   * Liveness refresh: the server republishes the current price and funding
+   * under a new round only when the oracle is old. It does not consume the
+   * user mark quota. The receipt is absent when no refresh was needed.
+   */
+  async refreshOracle() {
+    const body = await this.request('POST', '/session/refresh', {});
+    return {
+      oracle: parseOracle(body.oracle, 'refresh'),
+      receipt: body.receipt == null ? null : parseReceipt(body.receipt, 'refresh'),
+    };
   }
 
   async armKeeper() {

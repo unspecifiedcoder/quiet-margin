@@ -285,6 +285,11 @@ export async function createWorld() {
     receipts: session.receipts, ...(w.hooks.session?.() ?? {}),
   });
   let oracleRound = 0;
+  const nextRound = () => (oracleRound = Math.max(oracleRound, w.oracle?.round ?? 0) + 1);
+  // User test marks are capped and rate limited; liveness refreshes are not.
+  w.markQuota = Infinity;
+  w.markCooldown = false;
+  w.refreshAfterBlocks = 300;
   const server = {
     async 'POST /sessions'({ public_key, proof, ...extra }) {
       if (Object.keys(extra).length) throw Object.assign(new Error('unexpected fields'), { status: 400 });
@@ -302,11 +307,25 @@ export async function createWorld() {
       return sessionBody();
     },
     async 'POST /session/mark'({ price_ticks }) {
-      oracleRound += 1;
+      if (w.markQuota <= 0) throw Object.assign(new Error('test mark quota exhausted'), { status: 429 });
+      if (w.markCooldown) throw Object.assign(new Error('test mark cooldown'), { status: 429 });
+      w.markQuota -= 1;
       const hash = await serverTx(IDS.oracle, 'publish_oracle', {
-        round: oracleRound, price_ticks, funding_cents: w.oracle?.funding_cents ?? 0,
+        round: nextRound(), price_ticks, funding_cents: w.oracle?.funding_cents ?? 0,
       });
       return { oracle: { ...w.oracle }, receipt: { label: 'mark', hash } };
+    },
+    // Liveness: republishes the current price and funding only when old.
+    async 'POST /session/refresh'(body) {
+      if (!body || typeof body !== 'object' || Object.keys(body).length) {
+        throw Object.assign(new Error('refresh takes an empty body'), { status: 400 });
+      }
+      if (!w.oracle) throw Object.assign(new Error('no oracle'), { status: 409 });
+      if (w.height - w.oracle.height <= w.refreshAfterBlocks) return { oracle: { ...w.oracle } };
+      const hash = await serverTx(IDS.oracle, 'publish_oracle', {
+        round: nextRound(), price_ticks: w.oracle.price_ticks, funding_cents: w.oracle.funding_cents,
+      });
+      return { oracle: { ...w.oracle }, receipt: { label: 'oracle refresh', hash } };
     },
     async 'POST /session/approve'(body) {
       const p = w.pending;

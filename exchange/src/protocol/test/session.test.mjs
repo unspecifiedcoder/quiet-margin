@@ -185,13 +185,29 @@ test('fake IndexedDB reproduces the get-then-put race (control)', () => withFake
   const [a, b] = [indexedDbBackend('race-control'), indexedDbBackend('race-control')];
   // The previous get -> generate -> put -> re-read flow, with tab B's key
   // generation finishing after tab A already re-read (and used) its key.
-  const naive = async (backend, value, generateMs) => {
+  // Promise barriers fix the interleaving instead of timers: both tabs see
+  // no key, then A finishes entirely, then B's generation completes.
+  const barrier = () => {
+    let open;
+    return { promise: new Promise((r) => { open = r; }), open };
+  };
+  const readA = barrier();
+  const readB = barrier();
+  const doneA = barrier();
+  const naive = async (backend, value, read, generated) => {
     if (await backend.get('k')) return backend.get('k');
-    await new Promise((r) => setTimeout(r, generateMs));
+    read.open();
+    await generated; // key generation
     await backend.put('k', value);
     return backend.get('k');
   };
-  const [ra, rb] = await Promise.all([naive(a, 'A', 0), naive(b, 'B', 50)]);
+  const [ra, rb] = await Promise.all([
+    naive(a, 'A', readA, Promise.all([readA.promise, readB.promise])).then((v) => {
+      doneA.open();
+      return v;
+    }),
+    naive(b, 'B', readB, doneA.promise),
+  ]);
   assert.equal(ra, 'A');
   assert.equal(rb, 'B', 'tab B overwrote the key tab A already used');
 }));
