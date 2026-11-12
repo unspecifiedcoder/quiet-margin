@@ -16,6 +16,8 @@ const GAS_ALLOWANCE = NEAR / 10n;
 const MAX_ATTEMPTS_KEPT = 50;
 // Bounded tries of one oracle round after transient (non-healthy) failures.
 export const MAX_ROUND_ATTEMPTS = 3;
+// Short time backoff after a failed oracle refresh send (never a block bar).
+export const REFRESH_RETRY_MS = 2_000;
 // The client contract: a session view carries at most the latest 64 receipts.
 // The durable record keeps the full history.
 export const MAX_VIEW_RECEIPTS = 64;
@@ -98,6 +100,7 @@ export class Coordinator {
   #reserved = new Set();
   #lastCreateByClient = new Map();
   #serial = new KeyedSerializer();
+  #refreshRetryAt = new Map();
   #wake = null;
 
   /**
@@ -263,7 +266,8 @@ export class Coordinator {
       key, version: 1, status: 'provisioning', public_key: publicKey, token_hash: tokenHash,
       ...ids, deployment_id: this.random(32).toString('base64'),
       created_at: new Date(this.now()).toISOString(),
-      steps: {}, receipts: [], marks: 0, last_mark_at: 0, approvals: 0, keeper: null, last_error: null,
+      steps: {}, receipts: [], marks: 0, last_mark_at: 0,
+      refreshes: 0, approvals: 0, keeper: null, last_error: null,
     };
     return this.#save(record);
   }
@@ -588,6 +592,63 @@ export class Coordinator {
         return { oracle: current, tx };
       });
       const receipt = await this.#receipt(record, 'mark_' + oracle.round, tx);
+      this.#wake?.(record.key);
+      return { oracle, receipt };
+    });
+  }
+
+  // Keeps the current oracle round usable for a close or open without a user
+  // price: republishes the current price and cumulative funding as round + 1,
+  // only when the final round is at least `refreshAfterBlocks` old. A younger
+  // round is returned as is, with no transaction. Separate from the user mark
+  // quota and never capped per session: the age check, re-read from final
+  // chain state under the oracle signer lock, allows at most one publish per
+  // `refreshAfterBlocks` window. A failed send only defers a retry by a short
+  // time backoff, never by blocks, so a lost send cannot strand a position.
+  async refresh(record, body) {
+    exactKeys(body, []);
+    return this.#serial.run('session:' + record.key, async () => {
+      const after = this.config.refreshAfterBlocks;
+      const finalOracle = async () => {
+        const [oracle, height] = await Promise.all([
+          this.#view(record.market_id, 'get_oracle'),
+          this.chain.finalHeight(),
+        ]);
+        if (!oracle) throw new HttpError(409, 'no_oracle', 'the session market has no oracle round');
+        if (!Number.isSafeInteger(oracle.height) || !Number.isSafeInteger(height)) {
+          throw new HttpError(502, 'oracle_unavailable', 'the oracle round height is unavailable');
+        }
+        return { oracle, fresh: height - oracle.height < after };
+      };
+      const observed = await finalOracle();
+      if (observed.fresh) return { oracle: observed.oracle };
+      const wait = (this.#refreshRetryAt.get(record.key) ?? 0) - this.now();
+      if (wait > 0) {
+        throw new HttpError(429, 'refresh_retry', 'the last oracle refresh failed; retry shortly',
+          { 'Retry-After': String(Math.ceil(wait / 1000)) });
+      }
+      let result;
+      try {
+        result = await this.#serial.run('signer:ORACLE', async () => {
+          // Re-checked under the signer lock: a refresh that already landed is reused.
+          const { oracle: previous, fresh } = await finalOracle();
+          if (fresh) return { oracle: previous, tx: null };
+          const round = previous.round + 1;
+          const tx = await this.#callHeld('ORACLE', record.market_id, 'publish_oracle',
+            { round, price_ticks: previous.price_ticks, funding_cents: previous.funding_cents });
+          const current = await this.#view(record.market_id, 'get_oracle');
+          if (current?.round !== round) throw new Error('published oracle round is not final');
+          return { oracle: current, tx };
+        });
+      } catch (error) {
+        if (!(error instanceof HttpError)) this.#refreshRetryAt.set(record.key, this.now() + REFRESH_RETRY_MS);
+        throw error;
+      }
+      this.#refreshRetryAt.delete(record.key);
+      const { oracle, tx } = result;
+      if (!tx) return { oracle };
+      record.refreshes = (record.refreshes ?? 0) + 1;
+      const receipt = await this.#receipt(record, 'refresh_' + oracle.round, tx);
       this.#wake?.(record.key);
       return { oracle, receipt };
     });

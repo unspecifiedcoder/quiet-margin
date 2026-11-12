@@ -5,7 +5,7 @@ import { positionContext } from '../../../tests/actor.mjs';
 import { HEALTHY_REFUSAL, isHealthyRefusal } from '../actors.mjs';
 import { loadConfig, NEAR } from '../config.mjs';
 import {
-  bearerFromSignature, MAX_ROUND_ATTEMPTS, MAX_VIEW_RECEIPTS, parsePublicKey, sessionAccountIds, verifySessionProof,
+  bearerFromSignature, MAX_ROUND_ATTEMPTS, MAX_VIEW_RECEIPTS, parsePublicKey, REFRESH_RETRY_MS, sessionAccountIds, verifySessionProof,
 } from '../coordinator.mjs';
 import { MemoryStore } from '../store.mjs';
 import { HttpError } from '../util.mjs';
@@ -393,6 +393,114 @@ test('marks publish bounded rounds, retain funding, refresh safely and are rate 
   await h.coordinator.mark(record, { price_ticks: 9_000 });
   clock += 1_000;
   await rejects(h.coordinator.mark(record, { price_ticks: 9_000 }), 429, 'mark_limit');
+});
+
+test('refresh reuses a fresh round with no transaction and validates an exact empty body', async () => {
+  const h = harness();
+  const { record } = await ready(h);
+  const before = structuredClone(h.chain.markets.get(record.market_id).oracle);
+  const calls = h.chain.calls.length;
+  const receipts = record.receipts.length;
+  const result = await h.coordinator.refresh(record, {});
+  assert.deepEqual(result, { oracle: before });
+  h.chain.height += h.config.refreshAfterBlocks - 1 - (h.chain.height - before.height);
+  assert.deepEqual(await h.coordinator.refresh(record, {}), { oracle: before });
+  assert.equal(h.chain.calls.length, calls);
+  assert.equal(record.receipts.length, receipts);
+  assert.equal(record.refreshes, 0);
+  await rejects(h.coordinator.refresh(record, { price_ticks: 9_000 }), 400, 'unexpected_field');
+  await rejects(h.coordinator.refresh(record, { funding_cents: 0 }), 400, 'unexpected_field');
+  for (const body of [null, [], 'x', 1]) await rejects(h.coordinator.refresh(record, body), 400, 'invalid_body');
+  assert.equal(h.chain.calls.length, calls);
+});
+
+test('refresh republishes a stale round at the same price and funding without the user mark quota', async () => {
+  const h = harness({ env: { XYTHUM_MARKS_PER_SESSION: '1' } });
+  const { record } = await ready(h);
+  await h.coordinator.mark(record, { price_ticks: 9_500 });
+  await rejects(h.coordinator.mark(record, { price_ticks: 9_500 }), 429, 'mark_limit');
+  const market = h.chain.markets.get(record.market_id);
+  stageQuote(h, record, { entry: 9_500 });
+  h.chain.open(record.market_id);
+  market.oracle.funding_cents = 150;
+  const stale = structuredClone(market.oracle);
+  h.chain.height = stale.height + h.config.refreshAfterBlocks;
+  const calls = h.chain.calls.length;
+  const result = await h.coordinator.refresh(record, {});
+  assert.deepEqual(Object.keys(result), ['oracle', 'receipt']);
+  assert.equal(result.oracle.round, stale.round + 1);
+  assert.equal(result.oracle.price_ticks, 9_500);
+  assert.equal(result.oracle.funding_cents, 150);
+  assert.equal(result.receipt.label, 'refresh_' + result.oracle.round);
+  assert.deepEqual(h.chain.calls.slice(calls).map(({ signer, operation }) => signer + ':' + operation),
+    ['ORACLE:publish_oracle']);
+  assert.equal(record.marks, 1);
+  assert.equal(record.refreshes, 1);
+  assert.deepEqual(record.receipts.at(-1), result.receipt);
+  // The new round is fresh: a repeat call is a no-write reuse.
+  assert.deepEqual(await h.coordinator.refresh(record, {}), { oracle: result.oracle });
+  assert.equal(h.chain.calls.length, calls + 1);
+});
+
+test('refresh is bounded by final block age only, with no lifetime cap, and capped marks never block it', async () => {
+  const h = harness({ env: { XYTHUM_REFRESH_AFTER_BLOCKS: '100', XYTHUM_MARKS_PER_SESSION: '1' } });
+  const { record } = await ready(h);
+  await h.coordinator.mark(record, { price_ticks: 9_800 });
+  await rejects(h.coordinator.mark(record, { price_ticks: 9_800 }), 429, 'mark_limit');
+  const market = h.chain.markets.get(record.market_id);
+  const age = () => { h.chain.height = market.oracle.height + 100; };
+  const start = h.chain.calls.length;
+  // Far more windows than any former per-session cap: each stale window publishes once.
+  for (let window = 1; window <= 60; window += 1) {
+    age();
+    // Concurrent callers in one window: one publish, the rest reuse the fresh final round.
+    const results = await Promise.all([1, 2, 3].map(() => h.coordinator.refresh(record, {})));
+    assert.equal(results.filter((r) => r.receipt).length, 1);
+    assert.ok(results.every((r) => r.oracle.round === market.oracle.round && r.oracle.price_ticks === 9_800));
+    assert.equal(h.chain.calls.length, start + window);
+  }
+  assert.equal(record.refreshes, 60);
+  assert.equal(record.marks, 1);
+  assert.equal('last_refresh_height' in record, false);
+  assert.equal('refreshesPerSession' in h.config, false);
+  assert.throws(() => loadConfig({ XYTHUM_REFRESH_AFTER_BLOCKS: '1000' }), /between/);
+});
+
+test('a transient refresh publish failure is retried after a short backoff, not a block bar', async () => {
+  let clock = 50_000;
+  const h = harness({ env: { XYTHUM_REFRESH_AFTER_BLOCKS: '100' }, now: () => clock });
+  const { record } = await ready(h);
+  const market = h.chain.markets.get(record.market_id);
+  const stale = structuredClone(market.oracle);
+  h.chain.height = stale.height + 100;
+  const calls = h.chain.calls.length;
+  const receipts = record.receipts.length;
+
+  // The send fails before it lands: nothing is published and no window is consumed.
+  h.chain.failOnce('publish_oracle');
+  await assert.rejects(h.coordinator.refresh(record, {}), /simulated RPC failure/);
+  assert.deepEqual(market.oracle, stale);
+  assert.equal(record.refreshes, 0);
+  await rejects(h.coordinator.refresh(record, {}), 429, 'refresh_retry');
+  assert.equal(h.chain.calls.length, calls);
+  // The same block height: only the time backoff gates the retry.
+  clock += REFRESH_RETRY_MS;
+  const retried = await h.coordinator.refresh(record, {});
+  assert.equal(retried.oracle.round, stale.round + 1);
+  assert.equal(retried.receipt.label, 'refresh_' + retried.oracle.round);
+  assert.equal(h.chain.calls.length, calls + 1);
+  assert.equal(record.refreshes, 1);
+
+  // The send lands but its response is lost: the retry sees the fresh final round, no second write.
+  h.chain.height = market.oracle.height + 100;
+  h.chain.failOnce('publish_oracle', { afterEffect: true });
+  await assert.rejects(h.coordinator.refresh(record, {}), /simulated RPC failure/);
+  clock += REFRESH_RETRY_MS;
+  const landed = await h.coordinator.refresh(record, {});
+  assert.deepEqual(landed, { oracle: market.oracle });
+  assert.equal(landed.oracle.round, stale.round + 2);
+  assert.equal(h.chain.calls.length, calls + 1);
+  assert.equal(record.receipts.length, receipts + 1);
 });
 
 test('shared role signers are serialized across concurrent sessions', async () => {

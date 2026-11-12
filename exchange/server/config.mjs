@@ -107,7 +107,11 @@ export function loadConfig(env = process.env) {
     markMax,
     markIntervalMs: integer(env, 'XYTHUM_MARK_INTERVAL_MS', 2_000, 0, 600_000),
     marksPerSession: integer(env, 'XYTHUM_MARKS_PER_SESSION', 100, 1, 1_000),
-    approvalsPerSession: integer(env, 'XYTHUM_APPROVALS_PER_SESSION', 20, 1, 200),
+    // Server-driven same-price oracle refresh (POST /api/session/refresh): a
+    // final round younger than this is reused, so at most one publish lands per
+    // this many blocks, always before the 1000-block limit.
+    refreshAfterBlocks: integer(env, 'XYTHUM_REFRESH_AFTER_BLOCKS', 600, 100, 900),
+    approvalsPerSession:integer(env, 'XYTHUM_APPROVALS_PER_SESSION', 20, 1, 200),
     createCooldownMs: integer(env, 'XYTHUM_CREATE_COOLDOWN_MS', hosted ? 60_000 : 0, 0, 86_400_000),
     keeperPollMs: integer(env, 'XYTHUM_KEEPER_POLL_MS', 5_000, 500, 600_000),
     quoteTtlBlocks: integer(env, 'XYTHUM_QUOTE_TTL_BLOCKS', 500, 10, 900),

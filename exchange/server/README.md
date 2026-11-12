@@ -72,6 +72,7 @@ That rules out `margin_cents`, a position blinder, or a witness on any endpoint.
 | `GET /api/session` | (bearer) | session view with fresh oracle, ledger, receipts |
 | `POST /api/session/approve` | `{nonce, commitment, quote_blinder, size_lots, entry_ticks}` | `{acknowledgments: [sig, sig], receipt: {label, hash}}` |
 | `POST /api/session/mark` | `{price_ticks}` | `{oracle, receipt}` |
+| `POST /api/session/refresh` | exactly `{}` | `{oracle, receipt?}` |
 | `POST /api/session/keeper` | `{armed: true}` | `{keeper_armed, receipt?}` |
 | `GET /api/proving/open.pk`, `GET /api/proving/close.pk` | none | the original proving-key file bytes |
 | `GET /api/health` | none | `{ok, chain_id, sessions, session_quota}` |
@@ -115,6 +116,20 @@ Errors are `{error, message}` with a 4xx or 5xx status. Rate limits answer
   the cumulative funding index unchanged, so republishing the same price is
   safe. Marks are bounded by `XYTHUM_MARK_MIN_TICKS..XYTHUM_MARK_MAX_TICKS`,
   a per-session minimum interval, and a per-session count.
+- **Refresh.** Keeps the oracle round usable for a close (or open) without
+  a user price. If the current round is younger than
+  `XYTHUM_REFRESH_AFTER_BLOCKS` (600), it is returned as is, with no
+  transaction. Otherwise the oracle republishes the current price and
+  cumulative funding as `round + 1` (receipt `refresh_<round>`), well before
+  the contract's 1000-block freshness limit. It does not use the mark quota
+  or interval, and has no lifetime cap, so it can keep an open position
+  closable for as long as the session lives. The bound is elapsed block age:
+  the final round's age is re-read under the oracle-signer lock before any
+  send, so at most one publish lands per `XYTHUM_REFRESH_AFTER_BLOCKS` window
+  and a refresh that already landed is reused. A failed send records nothing
+  that blocks a retry by blocks; it only defers the next attempt by a short
+  backoff (`429 refresh_retry`, 2 s). It holds the same session and
+  oracle-signer locks as a mark.
 - **Keeper.** Arming requires an active slot and pins its nonce and
   commitment. The first attempt runs inline. After that, a background
   worker tries each distinct oracle round, whether or not the browser is
@@ -143,6 +158,10 @@ Errors are `{error, message}` with a 4xx or 5xx status. Rate limits answer
 - **Nonces.** Every transaction signed by a shared role key (root, maker,
   oracle, market deploy key, Keeper B) is serialized per signer. A pid lock
   in the session directory stops a second coordinator from running.
+  Record writes from HTTP requests and the keeper worker are serialized per
+  session inside the store: each save snapshots the record when called and
+  is written, in call order, through its own temp file and an atomic rename.
+  Temp files left by a crash are discarded at startup.
 - **Secrets.** Durable records live in `XYTHUM_SESSION_DIR`, which defaults to
   `.testnet/exchange-sessions/` and is ignored by Git. They hold only public
   chain data and a SHA-256 of the bearer token. The token, keys and request
@@ -183,6 +202,7 @@ Errors are `{error, message}` with a 4xx or 5xx status. Rate limits answer
 | `XYTHUM_INITIAL_PRICE_TICKS` | `10000` | within the mark band |
 | `XYTHUM_MARK_MIN_TICKS` / `XYTHUM_MARK_MAX_TICKS` | `1` / `20000` | 1–20,000 |
 | `XYTHUM_MARK_INTERVAL_MS` / `XYTHUM_MARKS_PER_SESSION` | `2000` / `100` | ≤ 600 s / ≤ 1,000 |
+| `XYTHUM_REFRESH_AFTER_BLOCKS` | `600` | 100–900 |
 | `XYTHUM_APPROVALS_PER_SESSION` | `20` | ≤ 200 |
 | `XYTHUM_QUOTE_TTL_BLOCKS` | `500` | 10–900 |
 | `XYTHUM_KEEPER_POLL_MS` | `5000` | 0.5–600 s |

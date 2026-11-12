@@ -70,6 +70,7 @@ async function main() {
     log('shutting down');
     server.close();
     await worker.stop();
+    await store.flush();
     store.close();
     process.exit(0);
   };

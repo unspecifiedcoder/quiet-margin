@@ -48,6 +48,21 @@ const post = (path, body, token, headers = {}) => fetch(base + path, {
   body: typeof body === 'string' ? body : JSON.stringify(body),
 });
 
+test('refresh requires the bearer and an exact empty object', async () => {
+  const created = await (await post('/api/sessions', enrollment())).json();
+  assert.equal((await post('/api/session/refresh', {})).status, 401);
+  const calls = h.chain.calls.length;
+  const reused = await post('/api/session/refresh', {}, created.session_id);
+  assert.equal(reused.status, 200);
+  assert.deepEqual(Object.keys(await reused.json()), ['oracle']);
+  const priced = await post('/api/session/refresh', { price_ticks: 1 }, created.session_id);
+  assert.equal(priced.status, 400);
+  assert.equal((await priced.json()).error, 'unexpected_field');
+  assert.equal((await post('/api/session/refresh', '[]', created.session_id)).status, 400);
+  assert.equal(h.chain.calls.length, calls);
+  assert.equal((await fetch(base + '/api/session/refresh')).status, 405);
+});
+
 test('session lifecycle over HTTP without leaking capabilities or bodies to logs', async () => {
   const body = enrollment();
   const publicKey = body.public_key;

@@ -79,6 +79,10 @@ export function createApp({ coordinator, config, log = () => {} }) {
       const { record } = coordinator.authenticate(req.headers.authorization);
       return [200, await coordinator.mark(record, await readJson(req))];
     },
+    'POST /api/session/refresh': async (req) => {
+      const { record } = coordinator.authenticate(req.headers.authorization);
+      return [200, await coordinator.refresh(record, await readJson(req))];
+    },
     'POST /api/session/keeper': async (req) => {
       const { record } = coordinator.authenticate(req.headers.authorization);
       return [200, await coordinator.keeper(record, await readJson(req))];
