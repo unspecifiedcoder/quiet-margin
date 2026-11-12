@@ -58,8 +58,16 @@ const CUSTODY = {
   'origin-storage': { short: 'Key in site storage', long: 'This browser lacks WebCrypto Ed25519, so the trader key is a secret kept in this site\'s storage. Clearing site data removes it.' },
 };
 
-export function mountExchange(root, handlers = {}) {
+/**
+ * options (all optional; the default route passes only privateWalletHref):
+ *   privateWalletHref  link to the private wallet route, shown beside Start session
+ *   banner             element placed under the top bar (private wallet identity)
+ *   cold               { title, body, button, noteSummary, note[] } copy for the
+ *                      not-yet-started state when the session is started elsewhere
+ */
+export function mountExchange(root, handlers = {}, options = {}) {
   if (!root) throw new Error('mountExchange: root element required');
+  const cold = options.cold ?? null;
   const id = `xc${++uid}`;
   const has = (name) => typeof handlers[name] === 'function';
   let state = normalizeState({});
@@ -162,22 +170,32 @@ export function mountExchange(root, handlers = {}) {
   r.nextLinkLabel = h('span');
   r.nextLink = h('a', { class: 'xc-link', target: '_blank', rel: 'noopener noreferrer', text: 'View on explorer' });
   r.nextEvidence = h('p', { class: 'xc-next__evidence' }, r.nextLinkLabel, ' ', r.nextLink);
-  r.startBtn = h('button', { type: 'button', class: 'xc-btn xc-btn--act xc-btn--block', text: 'Start session', onclick: () => run('onStart') });
+  r.startBtn = h('button', { type: 'button', class: 'xc-btn xc-btn--act xc-btn--block', text: cold?.button ?? 'Start session', onclick: () => run('onStart') });
   r.nextClose = h('button', { type: 'button', class: 'xc-btn xc-btn--risk', text: 'Close position', onclick: () => requestClose() });
   r.nextArm = h('button', { type: 'button', class: 'xc-btn xc-btn--ghost', text: 'Arm Keeper B', onclick: () => run('onArmKeeper') });
   // Once Keeper B is armed, the natural next step is to move the mark; this
   // opens the (still secondary) testnet tools at the mark field.
   r.nextMark = h('button', { type: 'button', class: 'xc-btn xc-btn--ghost', text: 'Publish a test mark', 'aria-controls': `${id}-tools`, onclick: () => openMarkTool() });
   r.nextActions = h('div', { class: 'xc-next__actions' }, r.startBtn, r.nextClose, r.nextArm, r.nextMark);
-  r.startNote = h('details', { class: 'xc-disclose' },
-    h('summary', { text: 'What Start session does' }),
-    h('ul', { class: 'xc-list' },
-      h('li', { text: 'Creates a signing key in this browser and proves possession of it to the coordinator.' }),
-      h('li', { text: `The coordinator provisions a NEAR testnet trader account controlled by that key, holding mock ${COLLATERAL}.` }),
-      h('li', { text: 'The page then checks the market config and the key on chain before showing balances.' }),
-      h('li', { text: 'Nothing is created until you click. A saved session in this browser is reattached automatically.' })));
+  r.startNote = cold?.note
+    ? h('details', { class: 'xc-disclose' },
+      h('summary', { text: cold.noteSummary ?? 'What this step does' }),
+      h('ul', { class: 'xc-list' }, cold.note.map((text) => h('li', { text }))))
+    : h('details', { class: 'xc-disclose' },
+      h('summary', { text: 'What Start session does' }),
+      h('ul', { class: 'xc-list' },
+        h('li', { text: 'Creates a signing key in this browser and proves possession of it to the coordinator.' }),
+        h('li', { text: `The coordinator provisions a NEAR testnet trader account controlled by that key, holding mock ${COLLATERAL}.` }),
+        h('li', { text: 'The page then checks the market config and the key on chain before showing balances.' }),
+        h('li', { text: 'Nothing is created until you click. A saved session in this browser is reattached automatically.' })));
+  // Alternative entry on the default route: the private wallet route.
+  r.altEntry = options.privateWalletHref
+    ? h('p', { class: 'xc-alt-entry' },
+      h('a', { class: 'xc-btn xc-btn--ghost xc-alt-entry__btn', href: options.privateWalletHref, 'aria-describedby': `${id}-alt-d`, text: 'Private wallet' }),
+      h('span', { class: 'xc-small xc-muted', id: `${id}-alt-d`, text: `A separate trader on a built-in NEAR testnet burner with demo ${COLLATERAL}. This browser's session here is not changed.` }))
+    : null;
   r.next = h('section', { class: 'xc-next', 'aria-labelledby': r.nextTitle.id },
-    stepList, r.nextTitle, r.nextBody, r.nextEvidence, r.nextActions, r.startNote);
+    stepList, r.nextTitle, r.nextBody, r.nextEvidence, r.nextActions, r.altEntry, r.startNote);
 
   // ---------- ticket: collateral ----------
   r.bal = { wallet: h('span', { class: 'xc-fig' }), available: h('span', { class: 'xc-fig' }), locked: h('span', { class: 'xc-fig' }), maker: h('span', { class: 'xc-fig' }) };
@@ -428,6 +446,7 @@ export function mountExchange(root, handlers = {}) {
   // the ticket in a right column spanning the chart and activity rows.
   root.append(
     top,
+    ...(options.banner ? [options.banner] : []),
     strip,
     h('div', { class: 'xc-statusbar' }, r.status, r.alert),
     h('main', { class: 'xc-grid' }, r.ticket, r.chartCard, r.activity, r.privacyCard),
@@ -1029,9 +1048,10 @@ export function mountExchange(root, handlers = {}) {
     switch (next) {
       case 'cold':
         title = state.busy === 'Restoring session' ? 'Checking for a saved session'
+          : state.busy === 'Recovering session' ? 'Recovering your session'
           : pending === 'onStart' || state.busy === 'Starting session' ? 'Setting up your session'
-            : 'Start a session to trade';
-        body = `Trade an isolated BTC long on a NEAR testnet market, margined in mock ${COLLATERAL} with no cash value. One click sets up a trader account for this browser. Deposits, opens and closes show a review before you sign.`;
+            : cold?.title ?? 'Start a session to trade';
+        body = cold?.body ?? `Trade an isolated BTC long on a NEAR testnet market, margined in mock ${COLLATERAL} with no cash value. One click sets up a trader account for this browser. Deposits, opens and closes show a review before you sign.`;
         break;
       case 'wait':
         title = 'Loading market';
@@ -1080,8 +1100,12 @@ export function mountExchange(root, handlers = {}) {
 
     r.startBtn.hidden = next !== 'cold';
     r.startNote.hidden = next !== 'cold';
+    // The private wallet link stays visible in every state, including for a
+    // browser already connected here: it opens a separate route and leaves
+    // this session untouched.
     r.startBtn.disabled = controlsLocked() || !has('onStart');
-    setText(r.startBtn, pending === 'onStart' || state.busy === 'Starting session' ? 'Starting…' : 'Start session');
+    setText(r.startBtn, state.busy === 'Recovering session' ? 'Recovering…'
+      : pending === 'onStart' || state.busy === 'Starting session' ? 'Starting…' : (cold?.button ?? 'Start session'));
     r.nextClose.hidden = next !== 'position';
     r.nextArm.hidden = !(next === 'position' || next === 'active') || state.keeperArmed;
     r.nextMark.hidden = !(next === 'position' || next === 'active') || !state.keeperArmed || !has('onSetMark');

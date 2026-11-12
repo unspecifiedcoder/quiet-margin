@@ -416,6 +416,84 @@ html, body { margin: 0; background: #101721; }
 
 .xc-foot { padding: 0 24px 28px; color: var(--muted); font-size: 12px; }
 
+/* ---------- private wallet (?wallet=burner) ---------- */
+/* Default route: the alternative entry under Start session. */
+.xc-alt-entry { display: grid; gap: 6px; padding-top: 10px; border-top: 1px solid var(--line); }
+.xc-alt-entry__btn { justify-self: start; text-decoration: none; color: var(--ink); }
+
+/* Landing: one centered card, single column at every width. */
+.xc-bw { padding: 28px 16px 20px; display: grid; justify-items: center; gap: 14px; }
+.xc-bw__card { width: min(560px, 100%); padding: 22px; display: grid; gap: 14px; }
+.xc-bw__title { font-size: 21px; font-weight: 700; line-height: 1.25; }
+.xc-bw__title:focus { outline: none; }
+.xc-bw__title:focus-visible { outline: 2px solid var(--ink); }
+.xc-bw__lead { color: var(--muted); font-size: 14px; }
+.xc-bw__choose { display: grid; gap: 8px; }
+.xc-bw__or { text-align: center; color: var(--muted); font-size: 12.5px; }
+.xc-bw__file-label { cursor: pointer; }
+.xc-bw__file-label.is-disabled { cursor: not-allowed; opacity: 0.5; }
+/* Visually hidden but focusable: its label is the visible control. */
+.xc-bw__file { position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden; clip: rect(0 0 0 0); }
+.xc-bw__file:focus-visible + .xc-bw__file-label { outline: 2px solid var(--ink); outline-offset: 2px; }
+.xc-bw__file:not(:disabled) + .xc-bw__file-label:hover { border-color: var(--muted); }
+.xc-bw__wallet { display: grid; gap: 16px; }
+.xc-bw__ids { padding: 12px 14px; border-radius: 8px; background: var(--well); border: 1px solid var(--line); }
+.xc-bw__mono { font: 12.5px var(--mono); overflow-wrap: anywhere; word-break: break-all; color: var(--ink); }
+.xc-bw__sec { display: grid; gap: 10px; padding-top: 14px; border-top: 1px solid var(--line); }
+.xc-bw__h { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 650; }
+.xc-bw__n {
+  display: inline-grid; place-items: center; width: 22px; height: 22px; flex: none; border-radius: 50%;
+  font-size: 12px; font-weight: 700; color: var(--act-ink); background: var(--act);
+}
+.xc-bw__req { display: grid; gap: 8px; }
+.xc-bw__msg {
+  margin: 0; padding: 10px 12px; max-height: 220px; overflow: auto; border-radius: 8px;
+  background: var(--well); border: 1px solid var(--line-2); color: var(--ink);
+  font: 12.5px/1.55 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.xc-bw__alt { text-align: center; }
+.xc-bw__status { font-size: 12.5px; color: var(--muted); min-height: 1.5em; }
+.xc-bw__status:empty { display: none; }
+.xc-bw__back { text-align: center; }
+
+/* Workspace banner: who is trading, and the way out. */
+.xc-bw-bar {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 8px 24px;
+  padding: 12px 24px; border-bottom: 1px solid var(--line); background: var(--surface);
+  border-left: 3px solid var(--act);
+}
+.xc-bw-bar__head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.xc-bw-bar__title { font-size: 15px; font-weight: 700; }
+.xc-bw-bar__title:focus { outline: none; }
+.xc-bw-bar__title:focus-visible { outline: 2px solid var(--ink); }
+.xc-bw-bar__ids { display: flex; flex-wrap: wrap; gap: 4px 24px; min-width: 0; }
+.xc-bw-bar__ids > div { display: grid; min-width: 0; }
+.xc-bw-bar__actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.xc-bw-bar__note { grid-column: 1 / -1; }
+.xc-bw-bar__backup { grid-column: 1 / -1; margin: 0; }
+.xc-bw-bar > .xc-notice { grid-column: 1 / -1; }
+@media (max-width: 1180px) {
+  .xc-bw-bar { grid-template-columns: minmax(0, 1fr) auto; }
+  .xc-bw-bar__ids { grid-column: 1 / -1; grid-row: 2; }
+}
+@media (max-width: 880px) {
+  .xc-bw-bar { grid-template-columns: minmax(0, 1fr); padding: 10px 14px; }
+  .xc-bw-bar__ids { grid-row: auto; }
+  .xc-bw-bar__actions { justify-content: flex-start; }
+}
+@media (max-width: 420px) {
+  .xc-bw { padding: 16px 10px; }
+  .xc-bw__card { padding: 16px 14px; }
+  .xc-bw__title { font-size: 19px; }
+  .xc-bw-bar__actions .xc-btn { flex: 1 1 auto; }
+  .xc-bw .xc-row { flex-wrap: wrap; }
+  .xc-bw .xc-row dd { text-align: left; }
+}
+@media (forced-colors: active) {
+  .xc-bw__n { forced-color-adjust: none; background: CanvasText; color: Canvas; }
+  .xc-bw-bar { border-left-color: Highlight; }
+}
+
 /* ---------- responsive ---------- */
 @media (max-width: 1180px) {
   .xc-grid { grid-template-columns: minmax(0, 1fr) 360px; }

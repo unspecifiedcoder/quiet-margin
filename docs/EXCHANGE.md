@@ -165,6 +165,47 @@ has **not** been tested.
   can still liquidate from their encrypted copy if the mark crosses
   liquidation.
 
+### Private wallet (`?wallet=burner`)
+
+The default route works exactly as described above. Its **Private wallet**
+link opens a separate same-origin route that uses a built-in NEAR testnet
+burner (an implicit account) with demo mUSDC collateral. The link stays
+visible in every state, including for a browser already connected on the
+default route; that session is not changed.
+
+1. **Create burner wallet** or **Recover from a backup file**. The file is a
+   local JSON file of at most 16 KB, read only in the browser.
+2. For a new burner, **Download backup file** (recommended, not required).
+   The page reports only **Download requested**: it cannot confirm the
+   browser saved the file, so check it. The backup controls the demo wallet
+   and its private trading wallet. The page never shows it, logs it or sends
+   it to the server.
+3. Review the readable request (site, network, recipient, message), then
+   **Sign and open private wallet** (new) or **Sign and recover private
+   wallet** (backup). Signing happens locally and sends no transaction.
+4. The original trading workspace opens, with the burner account, the private
+   trader account and the trader key shown above it. Only then does the
+   coordinator act on testnet: a new wallet provisions its trader account
+   (`onStart()`); a recovered wallet only reattaches the existing one
+   (`onStart({ recoverOnly: true })`) and never creates a trader. If that
+   step fails, **Retry private session** (new) or **Retry recovery**
+   (backup) repeats it on the same wallet. Backup download errors appear in
+   the banner above the workspace.
+
+Backups are bound to the site origin that made them, and recover only on that
+same origin. On a hosted invite-only testnet instance, recovery also enrolls
+through `POST /api/sessions`, so it needs the private invite like any new
+session: in the other browser, open the invite link first (the invite is kept
+for that tab only), then follow **Private wallet** in the same tab and
+**Recover from a backup file**. Without the invite, recovery fails with
+`invite_required` and nothing is created.
+
+**Lock private wallet**, a reload and a back/forward cache restore all return
+to the landing page. Nothing unlocks again until you sign again. A position
+opening is local: it stays in the browser that made it and is not in the
+backup. Keep that browser if you want to close an active position
+voluntarily.
+
 ## Session enrollment
 
 `POST /api/sessions` takes exactly `{ "public_key", "proof" }`
