@@ -4,3 +4,4 @@
 /.sandbox/
 .env
 *.witness.json
+/.testnet/
