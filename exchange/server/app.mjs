@@ -1,8 +1,10 @@
 // HTTP surface of the session coordinator. Logs carry only method, route name,
 // status and latency: never request bodies, headers, capabilities or keys.
+import { timingSafeEqual } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { extname, join, resolve, sep } from 'node:path';
+import { INVITE_PATTERN } from './config.mjs';
 import { HttpError, safeMessage } from './util.mjs';
 
 const BODY_LIMIT = 4_096;
@@ -11,6 +13,32 @@ const SECURITY_HEADERS = {
   'Referrer-Policy': 'no-referrer',
   'Cross-Origin-Resource-Policy': 'same-origin',
 };
+// The browser talks only to this origin and to the pinned testnet RPC.
+export const HOSTED_RPC_ORIGIN = 'https://test.rpc.fastnear.com';
+// Extra headers for the hosted build only (the Vite dev server is untouched).
+// 'wasm-unsafe-eval' lets the same-origin prover Wasm compile without allowing
+// JavaScript eval; the proving worker is a same-origin module script.
+export const HOSTED_CSP = [
+  "default-src 'self'",
+  "script-src 'self' 'wasm-unsafe-eval'",
+  "worker-src 'self'",
+  "connect-src 'self' " + HOSTED_RPC_ORIGIN,
+  "style-src 'self'",
+  "img-src 'self' data:",
+  "font-src 'self'",
+  "object-src 'none'",
+  "base-uri 'none'",
+  "form-action 'none'",
+  "frame-ancestors 'none'",
+].join('; ');
+export const HOSTED_HEADERS = Object.freeze({
+  'Content-Security-Policy': HOSTED_CSP,
+  'X-Frame-Options': 'DENY',
+  'Strict-Transport-Security': 'max-age=31536000',
+  'Cross-Origin-Opener-Policy': 'same-origin',
+  'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=(), usb=()',
+});
+export const INVITE_HEADER = 'x-xythum-invite';
 const STATIC_TYPES = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
   '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
@@ -22,7 +50,7 @@ export const PROVING_FILES = Object.freeze({ '/api/proving/open.pk': 'open.pk', 
 function sendJson(res, status, body, headers = {}) {
   const data = Buffer.from(JSON.stringify(body));
   res.writeHead(status, {
-    ...SECURITY_HEADERS, ...headers,
+    ...SECURITY_HEADERS, ...res.xythumHeaders, ...headers,
     'Content-Type': 'application/json; charset=utf-8', 'Content-Length': data.length, 'Cache-Control': 'no-store',
   });
   res.end(data);
@@ -56,17 +84,40 @@ async function sendFile(res, path, type, cache) {
     return false;
   }
   if (!info.isFile()) return false;
-  res.writeHead(200, { ...SECURITY_HEADERS, 'Content-Type': type, 'Content-Length': info.size, 'Cache-Control': cache });
+  res.writeHead(200, { ...SECURITY_HEADERS, ...res.xythumHeaders, 'Content-Type': type, 'Content-Length': info.size, 'Cache-Control': cache });
   await new Promise((resolveStream, reject) => {
     createReadStream(path).on('error', reject).on('end', resolveStream).pipe(res);
   });
   return true;
 }
 
+// Hosted admission: the X-Xythum-Invite header must be exactly the configured
+// 32-byte invite as 64 lowercase hex digits. Shape is checked first (it does
+// not depend on the secret), then the bytes are compared in constant time.
+export function checkInvite(header, invite) {
+  if (typeof header !== 'string' || !INVITE_PATTERN.test(header)) return false;
+  const given = Buffer.from(header, 'hex');
+  return given.length === invite.length && timingSafeEqual(given, invite);
+}
+
 export function createApp({ coordinator, config, log = () => {} }) {
   const distRoot = resolve(config.distDir);
+  const admit = (req) => {
+    if (!config.hosted) return;
+    if (!(config.hostedInvite instanceof Buffer) || config.hostedInvite.length !== 32) {
+      throw new Error('hosted mode without a configured invite');
+    }
+    if (!checkInvite(req.headers[INVITE_HEADER], config.hostedInvite)) {
+      throw new HttpError(401, 'invite_required', 'a valid invite is required to create a session');
+    }
+  };
   const routes = {
-    'POST /api/sessions': async (req) => [201, await coordinator.createSession(await readJson(req), req.socket.remoteAddress)],
+    // The invite gate runs before the body is read and before the coordinator
+    // (proof check, quota, cooldown, provisioning) sees the request.
+    'POST /api/sessions': async (req) => {
+      admit(req);
+      return [201, await coordinator.createSession(await readJson(req), req.socket.remoteAddress)];
+    },
     'GET /api/session': async (req) => {
       const { record, token } = coordinator.authenticate(req.headers.authorization);
       return [200, await coordinator.sessionView(record, token)];
@@ -100,7 +151,8 @@ export function createApp({ coordinator, config, log = () => {} }) {
     } catch {
       return false;
     }
-    if (decoded.includes('\0') || decoded.split(/[\\/]/).includes('..')) return false;
+    // No traversal and no dot paths (/.env, /.git/...): never a file, never the SPA fallback.
+    if (decoded.includes('\0') || decoded.split(/[\\/]/).some((segment) => segment.startsWith('.'))) return false;
     const target = resolve(join(distRoot, decoded));
     if (target !== distRoot && !target.startsWith(distRoot + sep)) return false;
     const type = STATIC_TYPES[extname(target).toLowerCase()];
@@ -113,6 +165,7 @@ export function createApp({ coordinator, config, log = () => {} }) {
   }
 
   return async function handle(req, res) {
+    if (config.hosted) res.xythumHeaders = HOSTED_HEADERS;
     const started = Date.now();
     let route = 'other';
     let status = 500;

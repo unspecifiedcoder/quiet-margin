@@ -40,11 +40,13 @@ export function actor(command, input, expectedError) {
   return JSON.parse(child.stdout);
 }
 
-export function prover(command, dir, input) {
+// `env` (optional) replaces the inherited environment of the native child.
+export function prover(command, dir, input, { env } = {}) {
   const suffix = process.platform === 'win32' ? '.exe' : '';
   const bin = process.env.PROVER_BIN
     ?? fileURLToPath(new URL('../prover/target/release/xythum-prover' + suffix, import.meta.url));
   const result = spawnSync(bin, dir ? [command, dir] : [command], {
+    ...(env ? { env } : {}),
     input: input === undefined ? undefined : JSON.stringify(input),
     encoding: 'utf8',
     timeout: command === 'setup' ? 300_000 : 120_000,

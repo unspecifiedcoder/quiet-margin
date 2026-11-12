@@ -1,7 +1,7 @@
 // Bounded configuration for the testnet session coordinator. Every value that
 // spends testnet NEAR or mock collateral has an explicit default and a hard cap.
 import { isIP } from 'node:net';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const NEAR = 10n ** 24n;
@@ -47,6 +47,11 @@ function nearAmount(env, name, fallback, max) {
 }
 
 const LOOPBACK = new Set(['127.0.0.1', '::1', 'localhost']);
+// Hosted admission secret: exactly 32 random bytes as lowercase hex.
+export const INVITE_PATTERN = /^[0-9a-f]{64}$/;
+// A hosted deployment must name every runtime path explicitly, so it never
+// falls back to the repository's local .testnet data or build outputs.
+export const HOSTED_PATHS = Object.freeze(['XYTHUM_SESSION_DIR', 'XYTHUM_PROVING_DIR', 'MARKET_WASM', 'PROVER_BIN']);
 
 export function loadConfig(env = process.env) {
   const host = env.XYTHUM_SERVER_HOST || '127.0.0.1';
@@ -55,6 +60,17 @@ export function loadConfig(env = process.env) {
     throw new ConfigError('binding ' + host + ' requires XYTHUM_ALLOW_HOSTED=1');
   }
   if (hosted && isIP(host) === 0) throw new ConfigError('XYTHUM_SERVER_HOST must be an IP address');
+  let hostedInvite = null;
+  if (hosted) {
+    // The invite value itself never appears in an error message.
+    if (!INVITE_PATTERN.test(env.XYTHUM_HOSTED_INVITE ?? '')) {
+      throw new ConfigError('hosted mode requires XYTHUM_HOSTED_INVITE: 32 random bytes as 64 lowercase hex digits');
+    }
+    hostedInvite = Buffer.from(env.XYTHUM_HOSTED_INVITE, 'hex');
+    for (const name of HOSTED_PATHS) {
+      if (!env[name] || !isAbsolute(env[name])) throw new ConfigError('hosted mode requires an absolute ' + name);
+    }
+  }
 
   const quotaRaw = env.XYTHUM_SESSION_QUOTA;
   // Without an explicit quota the server runs read-only for sessions.
@@ -87,6 +103,7 @@ export function loadConfig(env = process.env) {
   return Object.freeze({
     host,
     hosted,
+    hostedInvite,
     port: integer(env, 'XYTHUM_SERVER_PORT', 8790, 1, 65_535),
     serveDist: env.XYTHUM_SERVE_DIST !== '0',
     distDir: env.XYTHUM_DIST_DIR || fileURLToPath(new URL('../dist/', import.meta.url)),

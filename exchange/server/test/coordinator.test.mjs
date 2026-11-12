@@ -52,7 +52,11 @@ test('config defaults to loopback 8790, disables creation without a quota and bo
   assert.equal(config.sessionQuota, 0);
   assert.equal(config.traderNear, NEAR / 2n);
   assert.throws(() => loadConfig({ XYTHUM_SERVER_HOST: '0.0.0.0' }), /XYTHUM_ALLOW_HOSTED/);
-  assert.equal(loadConfig({ XYTHUM_SERVER_HOST: '0.0.0.0', XYTHUM_ALLOW_HOSTED: '1' }).createCooldownMs, 60_000);
+  assert.equal(loadConfig({
+    XYTHUM_SERVER_HOST: '0.0.0.0', XYTHUM_ALLOW_HOSTED: '1', XYTHUM_HOSTED_INVITE: randomBytes(32).toString('hex'),
+    XYTHUM_SESSION_DIR: '/data/sessions', XYTHUM_PROVING_DIR: '/app/artifacts/proving',
+    MARKET_WASM: '/app/artifacts/market.wasm', PROVER_BIN: '/app/bin/xythum-prover',
+  }).createCooldownMs, 60_000);
   assert.throws(() => loadConfig({ XYTHUM_SESSION_QUOTA: '51' }), /between/);
   assert.throws(() => loadConfig({ XYTHUM_TRADER_NEAR: '5' }), /bounded/);
   assert.throws(() => loadConfig({ XYTHUM_TRADER_MUSDC: '100' }), /between/);

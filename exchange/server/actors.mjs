@@ -83,9 +83,12 @@ export async function securePrivateDir(dir, { platform = process.platform, exec 
   return path;
 }
 
+// The only variables a child process (actor or native prover) inherits.
+export const childEnv = (source = process.env) => Object.fromEntries(CHILD_ENV
+  .filter((name) => source[name] !== undefined).map((name) => [name, source[name]]));
+
 export function runActor(command, input, { timeoutMs = 130_000, actorPath = ACTOR } = {}) {
-  const env = Object.fromEntries(CHILD_ENV.filter((name) => process.env[name] !== undefined)
-    .map((name) => [name, process.env[name]]));
+  const env = childEnv();
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [actorPath, command], { env, stdio: ['pipe', 'pipe', 'pipe'] });
     let stdout = '';

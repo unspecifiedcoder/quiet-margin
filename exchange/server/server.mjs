@@ -7,12 +7,12 @@ import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { join, resolve } from 'node:path';
 import { prover } from '../../tests/actor.mjs';
-import { createActors } from './actors.mjs';
+import { childEnv, createActors } from './actors.mjs';
 import { createApp } from './app.mjs';
 import { loadConfig, TESTNET_DIR } from './config.mjs';
 import { Coordinator } from './coordinator.mjs';
 import { SessionStore } from './store.mjs';
-import { codeHashOf, connectTestnet } from './testnet.mjs';
+import { codeHashOf, connectTestnet, takeCredentials } from './testnet.mjs';
 import { safeMessage } from './util.mjs';
 import { KeeperWorker } from './worker.mjs';
 
@@ -26,8 +26,13 @@ async function main() {
   for (const file of ['open.pk', 'close.pk', 'liquidation.pk']) {
     assert.ok(existsSync(join(config.provingDir, file)), 'missing public proving key ' + file);
   }
+  // Hosted: role credentials come only from runtime variables or a mounted
+  // file, never the local .env. They are loaded, and every secret variable
+  // and the invite deleted from process.env, before any child process starts.
+  const credentials = takeCredentials({ hosted: config.hosted, env: process.env });
   // Re-derive the verifying keys from the existing proving keys and pin them.
-  const keys = prover('keys', config.provingDir);
+  // Hosted, the native prover also gets only the minimal child environment.
+  const keys = prover('keys', config.provingDir, undefined, config.hosted ? { env: childEnv() } : {});
   for (const kind of ['open', 'liquidation', 'close']) {
     assert.equal(keys[kind + '_vk_sha256'], config.fingerprints[kind], kind + ' verifying key fingerprint differs from the pin');
   }
@@ -35,7 +40,7 @@ async function main() {
   const wasmSha = createHash('sha256').update(wasm).digest('hex');
   if (config.marketWasmSha256) assert.equal(wasmSha, config.marketWasmSha256, 'market Wasm differs from XYTHUM_MARKET_WASM_SHA256');
 
-  const testnet = await connectTestnet();
+  const testnet = await connectTestnet({ credentials });
   const store = await new SessionStore(config.sessionDir).open();
   const actors = createActors({
     keeperSecrets: testnet.keeperSecrets, keeperIds: testnet.ids.keepers,
@@ -58,8 +63,8 @@ async function main() {
   server.headersTimeout = 60_000;
   await new Promise((done, fail) => server.once('error', fail).listen(config.port, config.host, done));
   worker.start();
-  log('xythum session coordinator on http://' + (config.host.includes(':') ? '[' + config.host + ']' : config.host)
-    + ':' + config.port + ' (testnet, market Wasm ' + wasmSha.slice(0, 12) + ', ' + store.size + '/'
+  log('xythum session coordinator' + (config.hosted ? ' (hosted, invite required)' : '') + ' on http://'
+    + (config.host.includes(':') ? '[' + config.host + ']' : config.host) + ':' + config.port + ' (testnet, market Wasm ' + wasmSha.slice(0, 12) + ', ' + store.size + '/'
     + config.sessionQuota + ' sessions)');
   if (config.sessionQuota === 0) log('session creation disabled: set XYTHUM_SESSION_QUOTA');
 

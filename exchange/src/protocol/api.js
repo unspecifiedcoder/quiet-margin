@@ -98,16 +98,89 @@ export function parseSession(body) {
   };
 }
 
+// Hosted admission invite: the link carries `#invite=<64 lowercase hex>`.
+// It is taken out of the address bar at once (the fragment never reaches a
+// server, a Referer or the history entry) and kept in sessionStorage so a
+// reload or retry can still enroll. It is sent only as X-Xythum-Invite on
+// POST /api/sessions and is never logged. Without an invite (local mode)
+// nothing changes.
+export const INVITE_STORAGE_KEY = 'xythum:invite';
+export const INVITE_HEADER = 'x-xythum-invite';
+const INVITE = /^[0-9a-f]{64}$/;
+let memoryInvite = null;
+
+function defaultStorage() {
+  try {
+    return globalThis.sessionStorage ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Moves a `#invite=` fragment parameter out of the URL into sessionStorage
+ * (or memory if storage is unavailable) and returns the current invite, or
+ * null. A malformed or duplicated invite is removed from the URL, is not
+ * kept, and clears any previously stored invite.
+ */
+export function captureInvite({
+  location = globalThis.location, history = globalThis.history, storage = defaultStorage(),
+} = {}) {
+  const hash = typeof location?.hash === 'string' ? location.hash.replace(/^#/, '') : '';
+  const parts = hash ? hash.split('&') : [];
+  const found = parts.filter((part) => part.startsWith('invite='));
+  if (found.length > 0) {
+    const rest = parts.filter((part) => !part.startsWith('invite=')).join('&');
+    try {
+      history?.replaceState?.(history.state ?? null, '',
+        (location.pathname ?? '') + (location.search ?? '') + (rest ? '#' + rest : ''));
+    } catch {
+      // Without history access the fragment stays; enrollment still works.
+    }
+    // The newest link always wins: a malformed or duplicated invite clears
+    // any earlier one, so enrollment fails visibly with invite_required
+    // rather than silently using a stale invite. An existing session is
+    // unaffected (it authenticates with its own bearer, not the invite).
+    const value = found.length === 1 ? found[0].slice('invite='.length) : '';
+    memoryInvite = INVITE.test(value) ? value : null;
+    try {
+      if (memoryInvite) storage?.setItem(INVITE_STORAGE_KEY, memoryInvite);
+      else storage?.removeItem?.(INVITE_STORAGE_KEY);
+    } catch {
+      // Private mode or storage disabled: the in-memory value is used.
+    }
+    if (!memoryInvite) return null;
+  }
+  let stored = null;
+  try {
+    stored = storage?.getItem(INVITE_STORAGE_KEY) ?? null;
+  } catch {
+    stored = null;
+  }
+  if (typeof stored === 'string' && INVITE.test(stored)) return stored;
+  return memoryInvite;
+}
+
+// Capture at startup, before any other code can read or report the URL.
+if (typeof window !== 'undefined' && globalThis.location) captureInvite();
+
 export class Api {
-  constructor({ base = '/api', fetchImpl = globalThis.fetch.bind(globalThis) } = {}) {
+  #invite;
+
+  constructor({
+    base = '/api', fetchImpl = globalThis.fetch.bind(globalThis), invite = captureInvite(),
+  } = {}) {
     this.base = base;
     this.fetch = fetchImpl;
     this.sessionId = null;
+    // Private field: never serialized or enumerated with the client.
+    this.#invite = typeof invite === 'string' && INVITE.test(invite) ? invite : null;
   }
 
-  async request(method, path, body, { auth = true } = {}) {
+  async request(method, path, body, { auth = true, invite = false } = {}) {
     const headers = { accept: 'application/json' };
     if (body !== undefined) headers['content-type'] = 'application/json';
+    if (invite && this.#invite) headers[INVITE_HEADER] = this.#invite;
     if (auth) {
       if (!this.sessionId) throw new ApiError('no session');
       headers.authorization = 'Bearer ' + this.sessionId;
@@ -151,7 +224,8 @@ export class Api {
       raw = null;
     }
     if (!raw || toBase64(raw) !== proof) throw new ApiError('bad session proof');
-    const session = parseSession(await this.request('POST', '/sessions', { public_key: publicKey, proof }, { auth: false }));
+    const session = parseSession(await this.request('POST', '/sessions', { public_key: publicKey, proof },
+      { auth: false, invite: true }));
     this.sessionId = session.session_id;
     return session;
   }

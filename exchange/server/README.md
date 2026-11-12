@@ -179,16 +179,74 @@ Errors are `{error, message}` with a 4xx or 5xx status. Rate limits answer
   Do not set
   `NEAR_WORKSPACES_DEBUG`, because it prints transaction actions.
 - **Static files.** If `exchange/dist/` exists, it is served with
-  traversal checks and a single-page-app fallback. Turn this off with
+  traversal checks and a single-page-app fallback. Paths with any segment
+  starting with `.` (`/.env`, `/.git/...`, `/.well-known/...`) are never
+  served and never fall back to the app. Turn this off with
   `XYTHUM_SERVE_DIST=0`. The proving endpoints are two fixed file names.
   The proving directory is never browsable, and `.vk`, liquidation and
   witness files are never served.
+
+## Hosted mode (single instance, e.g. Fly)
+
+Hosted mode is any non-loopback `XYTHUM_SERVER_HOST`. It needs
+`XYTHUM_ALLOW_HOSTED=1`, and in addition:
+
+- `XYTHUM_HOSTED_INVITE`: 32 random bytes as 64 lowercase hex digits
+  (`openssl rand -hex 32`). `POST /api/sessions` must carry it as
+  `X-Xythum-Invite`. A missing, malformed or wrong value gets
+  `401 invite_required` before the body is read and before the coordinator
+  sees the request, so no proof check, quota, cooldown or provisioning runs.
+  The shape is checked first, then the 32 bytes are compared in constant
+  time. Every other route keeps the per-session bearer only.
+- Absolute `XYTHUM_SESSION_DIR`, `XYTHUM_PROVING_DIR`, `MARKET_WASM` and
+  `PROVER_BIN`, so nothing falls back to the repository's `.testnet` data.
+  For the Fly image: `XYTHUM_SERVER_HOST=0.0.0.0`,
+  `XYTHUM_SESSION_DIR=/data/sessions`, `XYTHUM_PROVING_DIR=/app/artifacts/proving`,
+  `MARKET_WASM=/app/artifacts/market.wasm`, `PROVER_BIN=/app/bin/xythum-prover`.
+- Role credentials from runtime variables only (`loadHostedEnv` in
+  `scripts/testnet-client.mjs`), or from one KEY=VALUE file named by
+  `XYTHUM_CREDENTIALS_FILE`, which must be an absolute path outside the
+  repository. That check runs on the given path and again on the canonical
+  (symlink/junction-resolved) paths of the file and the repository, and the
+  canonical file is what is read, so a link outside the repository that
+  points into it is refused. The local `.env` is never read. The variables are
+  `NEAR_NETWORK_ID=testnet`, `NEAR_RPC_URL` (the pinned testnet RPC),
+  `NEAR_<ROLE>_ACCOUNT_ID` for all eight roles, `NEAR_<ROLE>_SECRET_KEY` and
+  the matching `NEAR_<ROLE>_PUBLIC_KEY` for the signers `DEMO`, `MARKET`,
+  `MAKER`, `ORACLE` and `KEEPER_B`, and `NEAR_KEEPER_{A,B}_{ENCRYPTION,ACK}_{SECRET,PUBLIC}`.
+  Public keys for `TOKEN`, `TRADER` and `KEEPER_A` are optional. Their
+  `SECRET_KEY`s are never used by the host and are refused if set. Each
+  keeper secret must derive its published public key. Credentials are loaded
+  first at startup, before any child process: the secret variables, the
+  refused unused keys and the invite are then deleted from `process.env`
+  (also when loading fails). The native prover and the keeper actors run
+  with an explicit minimal environment (`PATH`, `SystemRoot`, `TEMP`/`TMP`,
+  `HOME`/`USERPROFILE`, `PROVER_BIN`), so no other runtime secret is
+  inherited either. Errors name variables, never values.
+
+The client takes the invite from a `#invite=<64 hex>` link fragment at
+startup, removes it from the address bar with `history.replaceState`, and
+keeps it in `sessionStorage` for enrollment and retries. The newest link
+wins: a malformed or duplicated `invite=` clears any stored invite, so
+enrollment fails with `invite_required` instead of silently reusing an old
+one. An existing session keeps working, since it authenticates with its own
+bearer and never with the invite. It sends it only on
+`POST /api/sessions`. Without an invite (local mode) nothing changes.
+
+Hosted responses also carry `Content-Security-Policy`
+(`default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self';
+connect-src 'self' https://test.rpc.fastnear.com; style-src 'self';
+frame-ancestors 'none'`, and so on), `X-Frame-Options: DENY`, HSTS,
+`Cross-Origin-Opener-Policy: same-origin` and a restrictive
+`Permissions-Policy`. Local mode and the Vite dev server are unchanged.
 
 ## Configuration
 
 | Variable | Default | Bound |
 | --- | --- | --- |
 | `XYTHUM_SERVER_HOST` / `XYTHUM_SERVER_PORT` | `127.0.0.1` / `8790` | a non-loopback IP needs `XYTHUM_ALLOW_HOSTED=1` |
+| `XYTHUM_HOSTED_INVITE` | none | required when hosted: 64 lowercase hex |
+| `XYTHUM_CREDENTIALS_FILE` | unset (runtime variables) | hosted only; absolute, outside the repository |
 | `XYTHUM_SESSION_QUOTA` | unset (creation off) | 1–50 |
 | `XYTHUM_SESSION_DIR` | `.testnet/exchange-sessions` | must not be `.testnet` or the proving directory |
 | `XYTHUM_PROVING_DIR` | `.testnet/proving` | must hold `open.pk`, `close.pk`, `liquidation.pk` |
@@ -234,9 +292,11 @@ so the root's remaining mUSDC caps how many sessions are possible in total.
   A ready legacy record keeps its original random bearer, so posting a proof
   for it gets `409`. A provisioning legacy record binds to the first valid
   proof.
-- Hosted mode limits creation by socket address only. It does not trust
-  `X-Forwarded-For` and has no admission token. Put an authenticating
-  proxy in front before exposing it publicly.
+- Hosted mode limits creation by socket address only and does not trust
+  `X-Forwarded-For` or `Fly-Client-IP`. Behind a proxy every client shares
+  one address, so the creation cooldown is effectively global. Admission is
+  the shared invite: anyone holding the link can create sessions up to the
+  quota.
 - `keeper_armed` and the settlement outcome are kept only in the durable
   record. The session view exposes `keeper_armed` and the
   `liquidation_<nonce>` receipt, not the full attempt history.

@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { utils } from 'near-api-js';
 import {
-  connectChain, demoAccounts, loadDemoEnv, TESTNET_GAS, TESTNET_RPC, viewFinal, waitFinal,
+  connectChain, demoAccounts, HOSTED_SECRET_VARIABLES, HOSTED_UNUSED_SECRETS, loadDemoEnv, loadHostedEnv, TESTNET_GAS, TESTNET_RPC, viewFinal, waitFinal,
 } from '../../scripts/testnet-client.mjs';
 import { FULL_GAS } from '../../tests/actor.mjs';
 import { safeMessage } from './util.mjs';
@@ -34,8 +34,34 @@ export function isMissingAccount(error, accountId) {
 
 export const codeHashOf =(wasm) => utils.serialize.base_encode(createHash('sha256').update(wasm).digest());
 
-export async function connectTestnet() {
-  const { env, roles } = loadDemoEnv();
+// Local runs read the repository .env through loadDemoEnv. A hosted run never
+// does: it takes only runtime role variables (or a mounted file) through
+// loadHostedEnv, which holds no TOKEN, TRADER or KEEPER_A transaction key.
+export function loadRoles({ hosted = false, env = process.env } = {}) {
+  return hosted ? loadHostedEnv(env) : loadDemoEnv();
+}
+
+// Every hosted variable holding secret material, including the admission
+// invite and the refused unused transaction keys.
+export const HOSTED_SCRUBBED = Object.freeze([
+  ...HOSTED_SECRET_VARIABLES, ...HOSTED_UNUSED_SECRETS, 'XYTHUM_HOSTED_INVITE',
+]);
+
+// Loads the role credentials and, when hosted, deletes every secret variable
+// from `env` (normally process.env) whether or not loading succeeded, so no
+// later child process can inherit them. Call it before spawning anything.
+export function takeCredentials({ hosted = false, env = process.env } = {}) {
+  try {
+    return loadRoles({ hosted, env });
+  } finally {
+    if (hosted) for (const name of HOSTED_SCRUBBED) delete env[name];
+  }
+}
+
+// `credentials` (the result of loadRoles) lets the caller load and scrub
+// secrets from process.env before any child process starts.
+export async function connectTestnet({ credentials, ...options } = {}) {
+  const { env, roles } = credentials ?? loadRoles(options);
   const chain = await connectChain(TESTNET_RPC, true);
   const accounts = await demoAccounts(chain, Object.fromEntries(SIGNERS.map((role) => [role, roles[role]])));
   return createTestnetAdapter({ env, roles, chain, accounts });
@@ -46,6 +72,11 @@ export async function createTestnetAdapter({ env, roles, chain, accounts, finali
   const roleIds = new Set(Object.values(roles).map(({ id }) => id));
   const existingMarket = roles.MARKET.id;
   const marketKey = roles.MARKET.key;
+  if (!marketKey || !roles.KEEPER_B.key) throw new Error('the MARKET and KEEPER_B signing keys are required');
+  // Hosted public-only roles carry `publicKey` (possibly null) instead of a key pair.
+  const rolePublicKeys = Object.values(roles)
+    .map(({ key, publicKey }) => (key ? key.getPublicKey().toString() : publicKey))
+    .filter((value) => typeof value === 'string');
 
   const finished = async (tx, what) => {
     if (!tx.succeeded || tx.receiptFailures.length !== 0) {
@@ -134,7 +165,7 @@ export async function createTestnetAdapter({ env, roles, chain, accounts, finali
       root: roles.DEMO.id, token: roles.TOKEN.id, maker: roles.MAKER.id, oracle: roles.ORACLE.id,
       keepers: KEEPER_ROLES.map((role) => roles[role].id),
       forbidden: [...roleIds],
-      rolePublicKeys: Object.values(roles).map(({ key }) => key.getPublicKey().toString()),
+      rolePublicKeys,
     },
     marketDeployKey: marketKey.getPublicKey().toString(),
     keeperAckKeys: KEEPER_ROLES.map((role) => env['NEAR_' + role + '_ACK_PUBLIC']),
