@@ -1,0 +1,6 @@
+/target
+# Never commit generated proving/verifying keys or private witnesses.
+*.pk
+*.vk
+keys/
+*.witness.json

@@ -1,0 +1,48 @@
+[package]
+name = "xythum-prover"
+description = "Groth16 circuits, reference model, and CLI for the Xythum NEAR sandbox market"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+publish = false
+
+[lib]
+name = "xythum_prover"
+path = "src/lib.rs"
+
+[[bin]]
+name = "xythum-prover"
+path = "src/main.rs"
+
+[dependencies]
+ark-bls12-381 = { version = "=0.5.0", default-features = false, features = ["curve"] }
+ark-crypto-primitives = { version = "=0.5.0", default-features = false, features = ["crh", "r1cs", "std"] }
+ark-ec = { version = "=0.5.0", default-features = false, features = ["std"] }
+ark-ff = { version = "=0.5.0", default-features = false, features = ["std"] }
+ark-groth16 = { version = "=0.5.0", default-features = false, features = ["std"] }
+ark-r1cs-std = { version = "=0.5.0", default-features = false, features = ["std"] }
+ark-relations = { version = "=0.5.1", default-features = false, features = ["std"] }
+ark-serialize = { version = "=0.5.0", default-features = false, features = ["std"] }
+ark-snark = { version = "=0.5.1", default-features = false }
+ark-std = { version = "=0.5.0", default-features = false, features = ["std", "getrandom"] }
+base64 = "=0.22.1"
+rand = { version = "=0.8.5", default-features = false, features = ["std", "getrandom"] }
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.145"
+sha2 = "=0.10.9"
+
+[dev-dependencies]
+# Used only to execute ../src/verifier.rs against the nearcore NEP-488 host
+# implementation (near-vm-runner) through near-sdk's mocked blockchain.
+near-sdk = { version = "=5.30.1", features = ["unit-testing"] }
+# near-sdk's mocked runtime pulls aws-lc-sys (via near-crypto). Use its vendored
+# prebuilt NASM objects so optimized Windows test builds need no NASM install.
+aws-lc-sys = { version = "=0.47.0", features = ["prebuilt-nasm"] }
+
+[profile.release]
+debug = false
+overflow-checks = true
+
+[profile.test]
+opt-level = 3
+overflow-checks = true
