@@ -25,15 +25,21 @@ export function memoryBackend() {
 
 export function indexedDbBackend(name = DB_NAME) {
   if (!globalThis.indexedDB) throw new Error('IndexedDB is unavailable; browser custody cannot be persisted');
-  const opened = new Promise((resolve, reject) => {
-    const req = indexedDB.open(name, 1);
-    req.onupgradeneeded = () => req.result.createObjectStore(STORE);
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-    req.onblocked = () => reject(new Error('exchange storage is blocked by another tab'));
-  });
+  // Opened on first use, so constructing the backend never creates the
+  // database (its existence must not be read as "this browser has a session").
+  let connection;
+  const opened = () => {
+    connection ??= new Promise((resolve, reject) => {
+      const req = indexedDB.open(name, 1);
+      req.onupgradeneeded = () => req.result.createObjectStore(STORE);
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+      req.onblocked = () => reject(new Error('exchange storage is blocked by another tab'));
+    });
+    return connection;
+  };
   const run = async (mode, fn) => {
-    const db = await opened;
+    const db = await opened();
     return new Promise((resolve, reject) => {
       const tx = db.transaction(STORE, mode);
       const req = fn(tx.objectStore(STORE));
@@ -50,7 +56,7 @@ export function indexedDbBackend(name = DB_NAME) {
     // transactions across every connection (tab) of this origin, so the
     // read and the conditional write cannot interleave with another tab.
     putIfAbsent: async (key, value) => {
-      const db = await opened;
+      const db = await opened();
       return new Promise((resolve, reject) => {
         const tx = db.transaction(STORE, 'readwrite');
         const store = tx.objectStore(STORE);

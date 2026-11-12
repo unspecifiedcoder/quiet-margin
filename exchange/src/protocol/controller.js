@@ -13,7 +13,7 @@ import { Chain, TxFailedError } from './chain.js';
 import { encryptWitness } from './envelope.js';
 import * as M from './model.js';
 import { interpretOutcome, pinRpcUrl, Rpc } from './rpc.js';
-import { loadSigner, sessionProof, verifyEd25519 } from './signer.js';
+import { loadSigner, sessionProof, storedSigner, verifyEd25519 } from './signer.js';
 import { CALL_GAS, functionCall, ONE_YOCTO } from './tx.js';
 
 const SESSION = 'session';
@@ -176,12 +176,29 @@ export class ExchangeController {
   // Session.
   // ------------------------------------------------------------------
 
+  /** Explicit user action: restores the saved session or enrolls this browser key. */
   onStart() {
+    // A click during the automatic restore waits for it instead of racing it.
+    if (this.restoring) return this.restoring.then(() => (this.ctx ? true : this.onStart()));
     return this.run('Starting session', () => this.start(), { requireSession: false });
   }
 
-  async start() {
-    const signer = await loadSigner(this.store);
+  /**
+   * Automatic page-load restore. Only reattaches a session this browser
+   * already saved, with the signer that saved it; it never creates a signer,
+   * never enrolls and never provisions anything server-side.
+   */
+  onResume() {
+    this.restoring ??= this.run('Restoring session', () => this.start({ restoreOnly: true }), { requireSession: false })
+      .finally(() => {
+        this.restoring = null;
+      });
+    return this.restoring;
+  }
+
+  async start({ restoreOnly = false } = {}) {
+    const signer = restoreOnly ? await storedSigner(this.store) : await loadSigner(this.store);
+    if (!signer) return;
     const saved = await this.store.get(SESSION);
     let session;
     if (saved && saved.public_key === signer.publicKey) {
@@ -190,6 +207,10 @@ export class ExchangeController {
       } catch (error) {
         if (!(error instanceof ApiError) || ![401, 403, 404].includes(error.status)) throw error;
       }
+    }
+    if (!session && restoreOnly) {
+      if (saved) this.state = { ...this.state, notice: 'The saved session is no longer valid; click Start session to continue' };
+      return;
     }
     // Enrollment proves possession of the browser key before the server
     // provisions anything; the same proof is valid for a retried request.

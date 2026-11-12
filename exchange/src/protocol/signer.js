@@ -84,6 +84,12 @@ export async function loadSigner(store, { allowFallback = true } = {}) {
   return fromRecord(await store.putIfAbsent(SIGNER_KEY, record));
 }
 
+/** Loads this browser's signer only if one was already created; never creates one. */
+export async function storedSigner(store) {
+  const existing = await store.get(SIGNER_KEY);
+  return existing ? fromRecord(existing) : null;
+}
+
 function fromRecord(record) {
   if (record.kind === 'webcrypto') return webCryptoSigner(record);
   if (record.kind === 'origin-storage') return originStorageSigner(record);

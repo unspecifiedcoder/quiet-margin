@@ -246,6 +246,103 @@ test('session enrollment is signed by the browser key and retried identically af
   assert.equal(enrollments[0].body.public_key, 'ed25519:' + toBase58(signer.publicKey));
 });
 
+const enrollments = (w) => w.serverBodies.filter((b) => b.route === 'POST /sessions');
+
+test('automatic restore on a fresh browser makes no request and creates no key', async () => {
+  const world = await createWorld();
+  const { w } = world;
+  const c = makeController(world);
+  assert.equal(await c.controller.onResume(), true, c.last()?.error);
+  assert.deepEqual(w.serverBodies, [], 'no server request at all');
+  assert.equal(await c.store.get('signer'), undefined, 'no signer created');
+  assert.deepEqual(await c.store.keys(''), []);
+  assert.equal(c.last().session, null);
+  assert.equal(c.last().error, null);
+  assert.equal(w.calls.length, 0);
+});
+
+test('automatic restore of a stale saved session never falls back to enrollment', async () => {
+  const world = await createWorld();
+  const { w } = world;
+  const first = await started(world);
+  const saved = await first.store.get('session');
+  await first.store.put('session', { ...saved, session_id: 'session-revoked-000000000' });
+  const before = enrollments(w).length;
+
+  const reload = makeController(world, first.store);
+  assert.equal(await reload.controller.onResume(), true, reload.last()?.error);
+  assert.equal(enrollments(w).length, before, 'no implicit POST /sessions');
+  assert.equal(reload.last().session, null);
+  assert.match(reload.last().notice, /Start session/);
+
+  // A saved session for a different key is not even queried.
+  const otherKey = makeController(world, first.store);
+  await first.store.put('session', { ...saved, public_key: 'ed25519:' + '1'.repeat(32) });
+  const gets = w.serverBodies.length;
+  assert.equal(await otherKey.controller.onResume(), true);
+  assert.equal(w.serverBodies.length, gets);
+
+  // The explicit click still re-enrolls the same key.
+  assert.equal(await reload.controller.onStart(), true, reload.last()?.error);
+  assert.equal(enrollments(w).length, before + 1);
+  assert.equal(reload.last().session.publicKey, saved.public_key);
+});
+
+test('automatic restore reattaches a valid saved session without enrolling', async () => {
+  const world = await createWorld();
+  const { w } = world;
+  const first = await started(world);
+  const reload = makeController(world, first.store);
+  assert.equal(await reload.controller.onResume(), true, reload.last()?.error);
+  assert.equal(enrollments(w).length, 1);
+  assert.equal(reload.last().session.traderId, IDS.trader);
+  assert.equal(reload.last().session.publicKey, first.last().session.publicKey);
+  assert.equal(await reload.controller.onDeposit(5), true, reload.last().error);
+});
+
+test('a Start click during the automatic restore waits for it instead of racing', async () => {
+  const world = await createWorld();
+  const { w } = world;
+  const first = await started(world);
+  const reload = makeController(world, first.store);
+  assert.deepEqual(await Promise.all([reload.controller.onResume(), reload.controller.onStart()]), [true, true]);
+  assert.ok(!reload.states.some((s) => /still in progress/.test(s.error ?? '')));
+  assert.equal(enrollments(w).length, 1);
+
+  // Fresh browser: the click enrolls exactly once after the no-op restore.
+  const fresh = makeController(await createWorld());
+  const res = await Promise.all([fresh.controller.onResume(), fresh.controller.onStart()]);
+  assert.deepEqual(res, [true, true], fresh.last()?.error);
+  assert.ok(!fresh.states.some((s) => /still in progress/.test(s.error ?? '')));
+  assert.ok(fresh.last().session);
+});
+
+test('after a lost enrollment response a reload stays idle and Start re-sends the same enrollment', async () => {
+  const world = await createWorld();
+  const { w } = world;
+  const realFetch = world.apiFetch;
+  let lose = 1;
+  world.apiFetch = async (url, init) => {
+    const response = await realFetch(url, init);
+    if (init.method === 'POST' && url === '/api/sessions' && lose-- > 0) throw new TypeError('network connection lost');
+    return response;
+  };
+  const first = makeController(world);
+  assert.equal(await first.controller.onStart(), false);
+  assert.equal(enrollments(w).length, 1);
+
+  const reload = makeController(world, first.store);
+  assert.equal(await reload.controller.onResume(), true, reload.last()?.error);
+  assert.equal(enrollments(w).length, 1, 'restore does not retry enrollment');
+  assert.equal(reload.last().session, null);
+
+  assert.equal(await reload.controller.onStart(), true, reload.last()?.error);
+  const sent = enrollments(w);
+  assert.equal(sent.length, 2);
+  assert.deepEqual(sent[1].body, sent[0].body, 'same signer, same signed enrollment');
+  assert.equal(reload.last().session.publicKey, sent[0].body.public_key);
+});
+
 test('a forged session proof is refused by the server', async () => {
   const world = await createWorld();
   const realFetch = world.apiFetch;

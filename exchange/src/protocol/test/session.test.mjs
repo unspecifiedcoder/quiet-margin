@@ -235,6 +235,14 @@ test('two tabs creating the vault key converge, so sealed records stay readable'
   assert.deepEqual(await a.getSealed('opening-b'), { margin: 2 });
 }));
 
+test('constructing the IndexedDB backend does not open or create the database', () => withFakeIndexedDB(async (idb) => {
+  const backend = indexedDbBackend('lazy');
+  await new Promise((r) => setTimeout(r, 5));
+  assert.equal(idb.data('lazy'), undefined);
+  assert.equal(await backend.get('signer'), undefined);
+  assert.ok(idb.data('lazy'));
+}));
+
 test('memory backend putIfAbsent keeps the first value', async () => {
   const store = new Store(memoryBackend());
   const [x, y] = await Promise.all([store.putIfAbsent('k', { v: 1 }), store.putIfAbsent('k', { v: 2 })]);

@@ -22,7 +22,6 @@ view = mountExchange(root, handlers);
 render(pending.pop() ?? controller.snapshot());
 pending.length = 0;
 
-// Resume an existing browser session automatically after a reload.
-indexedDB.databases?.().then((dbs) => {
-  if (dbs.some((db) => db.name === 'xythum-exchange')) handlers.onStart();
-});
+// Reattach a session this browser already saved. This never creates a key or
+// enrolls: a fresh visit stays idle until the user clicks Start session.
+controller.onResume();
