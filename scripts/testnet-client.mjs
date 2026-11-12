@@ -6,6 +6,7 @@ import { KeyPair, Worker } from 'near-workspaces';
 import near from 'near-api-js';
 
 export const TESTNET_RPC = 'https://test.rpc.fastnear.com';
+export const TESTNET_GAS = 80_000_000_000_000n;
 export const TESTNET_DIR = fileURLToPath(new URL('../.testnet/', import.meta.url));
 export const ROLES = ['DEMO', 'MARKET', 'TOKEN', 'TRADER', 'MAKER', 'ORACLE', 'KEEPER_A', 'KEEPER_B'];
 

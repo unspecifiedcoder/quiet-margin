@@ -3,6 +3,9 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { connectChain, demoAccounts, loadDemoEnv, TESTNET_DIR, TESTNET_RPC, waitFinal } from './testnet-client.mjs';
 
+const topUpSigners = process.argv[2] === '--top-up-signers';
+assert.ok(process.argv.length === 2 || (topUpSigners && process.argv.length === 3),
+  'use node scripts/provision-testnet.mjs [--top-up-signers]');
 const NEAR = 10n ** 24n;
 const initialBalances = {
   MARKET: 32n * NEAR / 10n,
@@ -52,6 +55,18 @@ for (const [role, balance] of Object.entries(initialBalances)) {
     await waitFinal(chain, tx);
   }
   journal[role] = { ...journal[role], account: child.accountId, public_key: await assertKey(role) };
+  if (topUpSigners && role !== 'MARKET' && role !== 'TOKEN') {
+    const state = await chain.provider.query({
+      request_type: 'view_account', finality: 'final', account_id: child.accountId,
+    });
+    const amount = BigInt(state.amount);
+    if (amount < balance) {
+      const tx = await accounts.DEMO.transfer(child, balance - amount);
+      assert.ok(tx.succeeded && tx.receiptFailures.length === 0, JSON.stringify(tx.status));
+      await waitFinal(chain, tx);
+      journal[role].last_top_up_tx = tx.transactionReceipt.hash;
+    }
+  }
   await writeFile(journalPath, JSON.stringify(journal, null, 2) + '\n');
   console.log(role + ' ' + child.accountId + ' verified');
 }

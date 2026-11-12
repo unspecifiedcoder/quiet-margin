@@ -31,6 +31,8 @@ mock collateral and a test-controlled oracle.
 
 The account keys are already provisioned. To verify the accounts or
 provision any remaining subaccounts, run `node scripts/provision-testnet.mjs`.
+Add `--top-up-signers` to replenish the demo role balances from the parent's
+test NEAR before a later run.
 
 Build the deployable Wasm and prover from the repository root:
 

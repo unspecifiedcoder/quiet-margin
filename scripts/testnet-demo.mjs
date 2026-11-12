@@ -5,7 +5,7 @@ import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promise
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { actor, FULL_GAS, makerApproval, prover, txEvidence } from '../tests/actor.mjs';
-import { connectChain, demoAccounts, loadDemoEnv, TESTNET_DIR, TESTNET_RPC, viewFinal, waitFinal } from './testnet-client.mjs';
+import { connectChain, demoAccounts, loadDemoEnv, TESTNET_DIR, TESTNET_GAS, TESTNET_RPC, viewFinal, waitFinal } from './testnet-client.mjs';
 
 const command = process.argv[2];
 assert.ok(['deploy', 'run', 'resume-active'].includes(command), 'use deploy, run, or resume-active');
@@ -44,7 +44,7 @@ async function record(file, value) {
 }
 
 async function call(account, target, method, args, options) {
-  const result = await account.callRaw(target, method, args, { gas: FULL_GAS, ...options });
+  const result = await account.callRaw(target, method, args, { gas: TESTNET_GAS, ...options });
   assert.ok(result.succeeded && result.receiptFailures.length === 0,
     method + ' failed: ' + JSON.stringify(result.failures));
   try {
@@ -165,6 +165,14 @@ async function runDemo() {
     network: 'testnet', market: market.accountId, token: token.accountId,
     initial_nonce: initialNonce, oracle_rounds: [], transactions: {},
   };
+  const journalPath = join(TESTNET_DIR, evidenceFile);
+  if (existsSync(journalPath)) {
+    const previous = JSON.parse(await readFile(journalPath, 'utf8'));
+    assert.equal(previous.market, market.accountId);
+    assert.equal(previous.initial_nonce, initialNonce);
+    assert.equal(previous.complete, undefined);
+    evidence.transactions = previous.transactions;
+  }
   const save = () => record(evidenceFile, evidence);
   const track = async (name, tx) => {
     evidence.transactions[name] = await tx;
@@ -278,7 +286,7 @@ async function runDemo() {
       ...keeperInput(1), oracleOverride: { ...healthy, price_ticks: 5200 },
     }).liquidation;
     const before = { active: await active(), ledger: await ledger() };
-    const refused = await keeperB.callRaw(market, 'liquidate', wrongPrice, { gas: FULL_GAS });
+    const refused = await keeperB.callRaw(market, 'liquidate', wrongPrice, { gas: TESTNET_GAS });
     assert.ok(refused.failed);
     await waitFinal(chain, refused);
     assert.match(JSON.stringify(refused.failures), /ERR_PROOF_INVALID/);
@@ -300,7 +308,7 @@ async function runDemo() {
     assert.equal(settled.trader_locked, 0);
     assert.equal(settled.bad_debt, 0);
     assert.equal(settled.next_nonce, initialNonce + 2);
-    const replay = await keeperB.callRaw(market, 'liquidate', liquidated.liquidation, { gas: FULL_GAS });
+    const replay = await keeperB.callRaw(market, 'liquidate', liquidated.liquidation, { gas: TESTNET_GAS });
     assert.ok(replay.failed);
     await waitFinal(chain, replay);
     assert.match(JSON.stringify(replay.failures), /ERR_NO_ACTIVE/);

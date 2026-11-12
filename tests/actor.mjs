@@ -9,7 +9,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { KeyPair } from 'near-workspaces';
-import { connectChain, viewFinal, waitFinal } from '../scripts/testnet-client.mjs';
+import { connectChain, TESTNET_GAS, viewFinal, waitFinal } from '../scripts/testnet-client.mjs';
 
 export const FULL_GAS = 250_000_000_000_000n;
 
@@ -251,7 +251,8 @@ async function act(command, input) {
   assert.equal(input.oracleOverride, undefined);
   const keeper = chain.rootAccount.getAccount(accountId);
   await keeper.setKey(KeyPair.fromString(keys.txKey));
-  const tx = await keeper.callRaw(contract, 'liquidate', liquidation, { gas: FULL_GAS });
+  const gas = input.testnet ? TESTNET_GAS : FULL_GAS;
+  const tx = await keeper.callRaw(contract, 'liquidate', liquidation, { gas });
   assert.ok(tx.succeeded && tx.receiptFailures.length === 0, JSON.stringify(tx.status));
   if (input.testnet) await waitFinal(chain, tx);
   return { liquidation, proving_ms: generated.proving_ms, tx: txEvidence(tx) };
