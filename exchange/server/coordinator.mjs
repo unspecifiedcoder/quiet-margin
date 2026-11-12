@@ -172,11 +172,18 @@ export class Coordinator {
 
   // -- Session creation -----------------------------------------------------
 
+  // Body: exactly {public_key, proof}, plus an optional strict-boolean
+  // `restore_only`. With `restore_only: true` the request only recovers an
+  // existing ready session for this key and proof (see #recoverSession).
   async createSession(body, client = 'local') {
-    exactKeys(body, ['public_key', 'proof']);
+    exactKeys(body, ['public_key', 'proof', 'restore_only']);
     if (!('public_key' in body) || !('proof' in body)) {
-      throw new HttpError(400, 'invalid_body', 'expected exactly {public_key, proof}');
+      throw new HttpError(400, 'invalid_body', 'expected exactly {public_key, proof} and optionally restore_only');
     }
+    if ('restore_only' in body && typeof body.restore_only !== 'boolean') {
+      throw new HttpError(400, 'invalid_restore_only', 'restore_only must be a JSON boolean');
+    }
+    const restoreOnly = body.restore_only === true;
     const publicKey = parsePublicKey(body.public_key);
     // Proof of possession comes first: nothing below (inflight setups, durable
     // records, quotas or cooldowns) is consulted for a caller without the key.
@@ -187,6 +194,7 @@ export class Coordinator {
     }
     const mismatch = () => new HttpError(409, 'session_exists',
       'a session for this public key was created with a different proof');
+    if (restoreOnly) return this.#recoverSession(publicKey, token, tokenHash, mismatch);
 
     const inflight = this.#inflight.get(publicKey);
     if (inflight) {
@@ -245,6 +253,32 @@ export class Coordinator {
     this.#inflight.set(publicKey, { promise, tokenHash });
     start();
     return promise;
+  }
+
+  // Recovery-only enrollment, reached only after the same body, proof and
+  // role-key checks as ordinary enrollment. It returns the existing ready
+  // session whose durable record is bound to this exact proof-derived bearer,
+  // or refuses. It never joins or starts a setup, never consults or consumes
+  // the queue, quota or cooldown, never writes a durable record and never
+  // signs a transaction: the only chain access is the read-only session view.
+  async #recoverSession(publicKey, token, tokenHash, mismatch) {
+    const inflight = this.#inflight.get(publicKey);
+    if (inflight && inflight.tokenHash !== tokenHash) throw mismatch();
+    const record = this.store.find((candidate) => candidate.public_key === publicKey);
+    if (record?.token_hash && record.token_hash !== tokenHash) throw mismatch();
+    if (inflight || (record && record.status !== 'ready')) {
+      throw new HttpError(409, 'session_not_ready',
+        'the session for this key is not ready; start a session normally to resume its setup');
+    }
+    if (!record) {
+      throw new HttpError(404, 'session_not_found',
+        'no session exists for this key; nothing was created. Start a new session to enroll it');
+    }
+    if (!record.token_hash) {
+      // A ready record that predates proofs has no bearer binding to recover against.
+      throw new HttpError(409, 'session_unbound', 'the session for this key is not bound to a proof and cannot be recovered');
+    }
+    return this.sessionView(record, token);
   }
 
   #reserveKey() {

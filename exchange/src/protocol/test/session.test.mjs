@@ -172,6 +172,34 @@ test('createSession posts exactly {public_key, proof} without a bearer', async (
   assert.equal(calls.length, 1);
 });
 
+test('recoverOnly adds exactly restore_only: true; options are strict and the server code is kept', async () => {
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    calls.push({ url, init });
+    return new Response(JSON.stringify({ error: 'session_not_found', message: 'none' }), { status: 404 });
+  };
+  const api = new Api({ base: '/api', fetchImpl });
+  const store = new Store(memoryBackend());
+  await store.put('signer', { kind: 'origin-storage', secret: seed, publicKey: seedPub });
+  const signer = await loadSigner(store);
+  const proof = await sessionProof(signer);
+  await assert.rejects(api.createSession(signer.publicKey, proof, { recoverOnly: true }),
+    (e) => e instanceof ApiError && e.status === 404 && e.code === 'session_not_found');
+  assert.deepEqual(JSON.parse(calls[0].init.body), { public_key: signer.publicKey, proof, restore_only: true });
+  assert.equal(calls[0].init.headers.authorization, undefined);
+  // An explicit false and an empty options object keep the legacy body.
+  await assert.rejects(api.createSession(signer.publicKey, proof, { recoverOnly: false }), ApiError);
+  await assert.rejects(api.createSession(signer.publicKey, proof, {}), ApiError);
+  for (const call of calls.slice(1)) assert.deepEqual(Object.keys(JSON.parse(call.init.body)), ['public_key', 'proof']);
+  assert.equal(calls.length, 3);
+  // Non-boolean or unknown options never reach the network.
+  for (const options of [{ recoverOnly: 'true' }, { recoverOnly: 1 }, { recoverOnly: null }, { restore_only: true },
+    { recoverOnly: true, extra: 1 }, null, true, []]) {
+    await assert.rejects(api.createSession(signer.publicKey, proof, options), /bad session options/, JSON.stringify(options));
+  }
+  assert.equal(calls.length, 3);
+});
+
 test('a 64-byte proof with non-zero padding bits is rejected as non-canonical', async () => {
   const api = new Api({ base: '/api', fetchImpl: async () => assert.fail('must not fetch') });
   const canonicalProof = toBase64(new Uint8Array(64));

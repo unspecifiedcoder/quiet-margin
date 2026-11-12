@@ -745,6 +745,144 @@ test('after a lost enrollment response a reload stays idle and Start re-sends th
   assert.equal(reload.last().session.publicKey, sent[0].body.public_key);
 });
 
+// Models the coordinator's recovery-only enrollment on top of the fake
+// server: restore_only:true returns the existing session only for a key
+// that enrolled normally before with the same proof, and 404s (allocating
+// nothing) otherwise. Recovery is read-only: it never reaches the fake
+// enrollment handler (which writes keys and balances); it reads the
+// existing session with that session's own bearer, like the coordinator.
+function recoveringServer(world) {
+  const realFetch = world.apiFetch;
+  const enrolled = new Map(); // public_key -> { proof, sessionId }
+  world.apiFetch = async (url, init) => {
+    if (init.method !== 'POST' || url !== '/api/sessions') return realFetch(url, init);
+    const { restore_only, ...body } = JSON.parse(init.body);
+    if (restore_only === undefined) {
+      const response = await realFetch(url, init);
+      if (response.ok) {
+        const { session_id } = await response.clone().json();
+        enrolled.set(body.public_key, { proof: body.proof, sessionId: session_id });
+      }
+      return response;
+    }
+    world.w.serverBodies.push({ route: 'POST /sessions (restore_only)', body: JSON.parse(init.body) });
+    if (restore_only !== true) return new Response(JSON.stringify({ error: 'invalid_restore_only' }), { status: 400 });
+    const existing = enrolled.get(body.public_key);
+    if (!existing) return new Response(JSON.stringify({ error: 'session_not_found', message: 'none' }), { status: 404 });
+    if (existing.proof !== body.proof) return new Response(JSON.stringify({ error: 'session_exists' }), { status: 409 });
+    return realFetch('/api/session', {
+      ...init, method: 'GET', body: undefined,
+      headers: { ...init.headers, authorization: 'Bearer ' + existing.sessionId },
+    });
+  };
+}
+
+const recoveries = (w) => w.serverBodies.filter((b) => b.route === 'POST /sessions (restore_only)');
+
+/** A browser that imported only the key backup: the signer record and nothing else. */
+async function imported(world, from) {
+  const store = new Store(memoryBackend());
+  await store.put('signer', await from.store.get('signer'));
+  return makeController(world, store);
+}
+
+test('recoverOnly re-attaches the same trader for an imported key without a saved session', async () => {
+  const world = await createWorld();
+  const { w } = world;
+  recoveringServer(world);
+  const first = await started(world);
+  const original = enrollments(w)[0].body;
+
+  const restored = await imported(world, first);
+  assert.equal(await restored.controller.onStart({ recoverOnly: true }), true, restored.last()?.error);
+  const [sent] = recoveries(w);
+  assert.deepEqual(sent.body, { ...original, restore_only: true }, 'same key, same deterministic proof');
+  assert.equal(enrollments(w).length, 1, 'no ordinary enrollment');
+  assert.equal(restored.last().session.traderId, first.last().session.traderId);
+  assert.equal(restored.last().session.marketId, first.last().session.marketId);
+  assert.equal(restored.last().session.publicKey, original.public_key);
+  assert.equal((await restored.store.get('session')).public_key, original.public_key);
+  assert.equal(await restored.controller.onDeposit(5), true, restored.last().error);
+
+  // With a valid saved bearer, recovery uses it and sends no POST at all.
+  const reload = makeController(world, restored.store);
+  assert.equal(await reload.controller.onStart({ recoverOnly: true }), true, reload.last()?.error);
+  assert.equal(recoveries(w).length, 1);
+  assert.equal(enrollments(w).length, 1);
+});
+
+test('recoverOnly never falls back to enrollment or key creation', async () => {
+  const world = await createWorld();
+  const { w } = world;
+  recoveringServer(world);
+  // A key backup that was never enrolled on this server.
+  const never = await imported(world, { store: (await started(await createWorld())).store });
+  assert.equal(await never.controller.onStart({ recoverOnly: true }), false);
+  assert.match(never.last().error, /no session for the imported key.*no new account was created/);
+  assert.equal(recoveries(w).length, 1);
+  assert.equal(enrollments(w).length, 0, 'no ordinary POST /sessions');
+  assert.equal(never.last().session, null);
+  assert.equal(await never.store.get('session'), undefined);
+  assert.equal(w.calls.length, 0);
+
+  // No stored key: nothing is generated and nothing is sent.
+  const empty = makeController(world);
+  assert.equal(await empty.controller.onStart({ recoverOnly: true }), false);
+  assert.match(empty.last().error, /import the key backup/);
+  assert.equal(await empty.store.get('signer'), undefined);
+  assert.equal(w.serverBodies.length, 1);
+
+  // Options are strict: anything but a boolean recoverOnly is refused before any request.
+  for (const options of [{ recoverOnly: 'true' }, { recoverOnly: 1 }, { restoreOnly: true }, null, []]) {
+    assert.equal(await empty.controller.onStart(options), false, JSON.stringify(options));
+    assert.match(empty.last().error, /recoverOnly: boolean/);
+  }
+  assert.equal(w.serverBodies.length, 1);
+  assert.equal(await empty.store.get('signer'), undefined);
+  await assert.rejects(empty.controller.start({ restoreOnly: true, recoverOnly: true }), TypeError);
+
+  // The legacy default still enrolls with exactly {public_key, proof}.
+  assert.equal(await empty.controller.onStart(), true, empty.last()?.error);
+  assert.deepEqual(Object.keys(enrollments(w)[0].body), ['public_key', 'proof']);
+  assert.equal(await empty.controller.onStart({ recoverOnly: false }), true, empty.last()?.error);
+});
+
+test('recoverOnly never enrolls on a malformed or unexpected recovery response', async () => {
+  const world = await createWorld();
+  const { w } = world;
+  const first = await started(world);
+  const before = enrollments(w).length;
+  const realFetch = world.apiFetch;
+  const replies = [
+    () => new Response('', { status: 200 }),
+    () => new Response('null', { status: 200 }),
+    () => new Response('{"session_id":1}', { status: 200 }),
+    () => new Response('not json', { status: 200 }),
+    () => new Response(JSON.stringify({ error: 'constructor' }), { status: 409 }),
+    () => new Response(JSON.stringify({ error: '__proto__' }), { status: 409 }),
+    () => new Response(JSON.stringify({ error: 'internal' }), { status: 500 }),
+  ];
+  for (const reply of replies) {
+    let recoveryPosts = 0;
+    world.apiFetch = async (url, init) => {
+      if (init.method === 'POST' && url === '/api/sessions' && JSON.parse(init.body).restore_only === true) {
+        recoveryPosts += 1;
+        return reply();
+      }
+      return realFetch(url, init);
+    };
+    const restored = await imported(world, first);
+    assert.equal(await restored.controller.onStart({ recoverOnly: true }), false);
+    assert.equal(recoveryPosts, 1);
+    assert.equal(enrollments(w).length, before, 'no ordinary enrollment after ' + reply().status);
+    assert.equal(restored.last().session, null);
+    assert.equal(await restored.store.get('session'), undefined);
+    assert.ok(!/new account was created|still being set up|different proof|predates/.test(restored.last().error),
+      'unknown codes get no refusal message: ' + restored.last().error);
+    if (reply().status === 409) assert.match(restored.last().error, /failed \(409\)/, 'the raw server error is kept');
+  }
+});
+
 test('a forged session proof is refused by the server', async () => {
   const world = await createWorld();
   const realFetch = world.apiFetch;

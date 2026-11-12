@@ -218,6 +218,100 @@ test('a ready session bound to a different bearer is not re-issued', async () =>
   await rejects(legacy.coordinator.createSession(body), 409, 'session_exists');
 });
 
+const recover = (body) => ({ ...body, restore_only: true });
+const snapshot = (h) => JSON.stringify(h.store.snapshot());
+
+test('restore_only for an unknown key allocates nothing, even with capacity, quota and no cooldown', async () => {
+  let clock = 0;
+  const h = harness({ env: { XYTHUM_SESSION_QUOTA: '5', XYTHUM_CREATE_COOLDOWN_MS: '1000' }, now: () => clock });
+  const body = enrollment();
+  await rejects(h.coordinator.createSession(recover(body), '10.0.0.1'), 404, 'session_not_found');
+  await rejects(h.coordinator.createSession(recover(body), '10.0.0.1'), 404, 'session_not_found');
+  assert.equal(h.store.size, 0);
+  assert.equal(h.chain.calls.length, 0);
+  // The cooldown was neither consulted nor consumed: an ordinary creation proceeds at once.
+  await h.coordinator.createSession(fresh(), '10.0.0.1');
+  assert.equal(h.store.size, 1);
+  // Explicit false is the ordinary path.
+  await h.coordinator.createSession({ ...body, restore_only: false }, '10.0.0.2');
+  assert.equal(h.store.size, 2);
+});
+
+test('restore_only returns the exact existing ready session after the quota is exhausted, with no writes or transactions', async () => {
+  const h = harness({ env: { XYTHUM_SESSION_QUOTA: '1', XYTHUM_CREATE_COOLDOWN_MS: '60000' } });
+  const { view, body } = await ready(h);
+  await rejects(h.coordinator.createSession(enrollment()), 429, 'quota_exhausted');
+  const calls = h.chain.calls.length;
+  const before = snapshot(h);
+  const save = h.store.save;
+  h.store.save = () => assert.fail('recovery must not write a durable record');
+  const recovered = await h.coordinator.createSession(recover(body), '10.0.0.7');
+  h.store.save = save;
+  assert.deepEqual(recovered, view);
+  assert.equal(h.chain.calls.length, calls);
+  assert.equal(snapshot(h), before);
+  assert.equal(h.coordinator.authenticate('Bearer ' + recovered.session_id).record.trader_id, view.trader_id);
+  // After a restart from the durable store (new process, empty in-memory state).
+  const restarted = harness({ chain: h.chain, store: new MemoryStore(h.store.snapshot()), env: { XYTHUM_SESSION_QUOTA: '1' } });
+  assert.deepEqual(await restarted.coordinator.createSession(recover(body)), view);
+  assert.equal(h.chain.calls.length, calls);
+});
+
+test('restore_only validates the body and proof exactly like enrollment and leaks nothing', async () => {
+  const h = harness();
+  const { body } = await ready(h);
+  const calls = h.chain.calls.length;
+  const before = snapshot(h);
+  for (const value of ['true', 1, 0, null, {}, [], 'yes']) {
+    await rejects(h.coordinator.createSession({ ...body, restore_only: value }), 400, 'invalid_restore_only');
+  }
+  await rejects(h.coordinator.createSession({ public_key: body.public_key, restore_only: true }), 400, 'invalid_body');
+  await rejects(h.coordinator.createSession({ ...recover(body), extra: 1 }), 400, 'unexpected_field');
+  await rejects(h.coordinator.createSession({ restoreOnly: true, ...body }), 400, 'unexpected_field');
+  // A bad proof gets the same 401 for a ready key as for an unknown one.
+  for (const forged of [
+    { ...body, proof: enrollment().proof }, { ...body, proof: Buffer.alloc(64).toString('base64') },
+    { public_key: browserKey(), proof: body.proof },
+  ]) {
+    await rejects(h.coordinator.createSession(recover(forged)), 401, 'invalid_proof');
+  }
+  await rejects(h.coordinator.createSession(recover(enrollment(TRADER_ROLE_PAIR))), 400, 'invalid_public_key');
+  assert.equal(h.chain.calls.length, calls);
+  assert.equal(snapshot(h), before);
+});
+
+test('restore_only refuses pending, unfinished and differently bound sessions without touching them', async () => {
+  const h = harness();
+  h.chain.delayMs = 5;
+  const body = enrollment();
+  const pending = h.coordinator.createSession(body);
+  await rejects(h.coordinator.createSession(recover(body)), 409, 'session_not_ready');
+  await pending;
+
+  // An interrupted setup is not resumed by recovery.
+  const chain = new MockChain();
+  const first = harness({ chain });
+  const key = enrollment();
+  chain.failOnce('createTraderAccount', { afterEffect: true });
+  await rejects(first.coordinator.createSession(key), 502, 'setup_incomplete');
+  const restarted = harness({ chain, store: new MemoryStore(first.store.snapshot()) });
+  const calls = chain.calls.length;
+  const before = snapshot(restarted);
+  await rejects(restarted.coordinator.createSession(recover(key)), 409, 'session_not_ready');
+  assert.equal(chain.calls.length, calls);
+  assert.equal(snapshot(restarted), before);
+  assert.equal(restarted.store.all()[0].status, 'provisioning');
+
+  // A ready record bound to another bearer, or to none, is never re-issued.
+  const bound = harness();
+  const { record, body: boundBody } = await ready(bound);
+  record.token_hash = 'f'.repeat(64);
+  await rejects(bound.coordinator.createSession(recover(boundBody)), 409, 'session_exists');
+  delete record.token_hash;
+  await rejects(bound.coordinator.createSession(recover(boundBody)), 409, 'session_unbound');
+  assert.equal(record.token_hash, undefined, 'recovery does not bind a legacy record');
+});
+
 test('the setup slot is claimed synchronously, so a same-key race cannot reserve a second record', async () => {
   const h = harness({ env: { XYTHUM_SESSION_QUOTA: '2', XYTHUM_CREATE_COOLDOWN_MS: '60000' } });
   const body = enrollment();

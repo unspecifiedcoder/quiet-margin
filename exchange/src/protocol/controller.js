@@ -248,11 +248,25 @@ export class ExchangeController {
   // Session.
   // ------------------------------------------------------------------
 
-  /** Explicit user action: restores the saved session or enrolls this browser key. */
-  onStart() {
+  /**
+   * Explicit user action: restores the saved session or enrolls this browser
+   * key. With `{ recoverOnly: true }` (after importing a key backup) it only
+   * reattaches the existing session of the stored key, through the saved
+   * bearer or a signed recovery-only request; it never creates a key and
+   * never enrolls a new trader account.
+   */
+  onStart(options = {}) {
+    let recoverOnly;
+    try {
+      ({ recoverOnly } = startOptions(options));
+    } catch (error) {
+      this.emit({ error: describe(error) });
+      return Promise.resolve(false);
+    }
     // A click during the automatic restore waits for it instead of racing it.
-    if (this.restoring) return this.restoring.then(() => (this.ctx ? true : this.onStart()));
-    return this.run('Starting session', () => this.start(), { requireSession: false });
+    if (this.restoring) return this.restoring.then(() => (this.ctx ? true : this.onStart({ recoverOnly })));
+    return this.run(recoverOnly ? 'Recovering session' : 'Starting session',
+      () => this.start({ recoverOnly }), { requireSession: false });
   }
 
   /**
@@ -268,9 +282,15 @@ export class ExchangeController {
     return this.restoring;
   }
 
-  async start({ restoreOnly = false } = {}) {
-    const signer = restoreOnly ? await storedSigner(this.store) : await loadSigner(this.store);
-    if (!signer) return;
+  async start({ restoreOnly = false, recoverOnly = false } = {}) {
+    if (typeof restoreOnly !== 'boolean' || typeof recoverOnly !== 'boolean' || (restoreOnly && recoverOnly)) {
+      throw new TypeError('start takes at most one of restoreOnly and recoverOnly, as booleans');
+    }
+    const signer = restoreOnly || recoverOnly ? await storedSigner(this.store) : await loadSigner(this.store);
+    if (!signer) {
+      if (recoverOnly) throw new Error('No browser key is stored to recover; import the key backup first');
+      return;
+    }
     const saved = await this.store.get(SESSION);
     let session;
     if (saved && saved.public_key === signer.publicKey) {
@@ -286,7 +306,21 @@ export class ExchangeController {
     }
     // Enrollment proves possession of the browser key before the server
     // provisions anything; the same proof is valid for a retried request.
-    session ??= await this.api.createSession(signer.publicKey, await sessionProof(signer));
+    // Recovery sends the same proof but only accepts the existing session.
+    // A recovery never falls through to ordinary enrollment: any refusal,
+    // malformed response or missing session ends the attempt here.
+    if (!session && recoverOnly) {
+      try {
+        session = await this.api.createSession(signer.publicKey, await sessionProof(signer), { recoverOnly: true });
+      } catch (error) {
+        const message = error instanceof ApiError ? recoveryRefusal(error.code) : undefined;
+        if (!message) throw error;
+        throw new Error(message, { cause: error });
+      }
+      if (!session) throw new Error('The exchange server returned no session for the imported key; nothing was recovered');
+    } else if (!session) {
+      session = await this.api.createSession(signer.publicKey, await sessionProof(signer));
+    }
 
     const rpcUrl = pinRpcUrl(session.chain_id, session.rpc_url, { allowSandbox: this.allowSandbox });
     const rpc = this.rpcFactory(rpcUrl);
@@ -1094,6 +1128,33 @@ export class ExchangeController {
     }
     throw new Error('the oracle kept moving during close proving; try again');
   }
+}
+
+/** `onStart` options: nothing, or exactly `{ recoverOnly: boolean }`. */
+function startOptions(options) {
+  if (options === undefined) return { recoverOnly: false };
+  if (options === null || typeof options !== 'object' || Array.isArray(options)
+    || Object.keys(options).some((key) => key !== 'recoverOnly')
+    || ('recoverOnly' in options && typeof options.recoverOnly !== 'boolean')) {
+    throw new TypeError('onStart takes no options or { recoverOnly: boolean }');
+  }
+  return { recoverOnly: options.recoverOnly === true };
+}
+
+/** User-facing messages for the coordinator's recovery-only refusals; nothing was created for any of them. */
+const RECOVERY_REFUSALS = Object.freeze({
+  __proto__: null,
+  session_not_found: 'This exchange server has no session for the imported key, so nothing was recovered and '
+    + 'no new account was created. Start a new session only if you want a different trader account',
+  session_not_ready: 'The session for the imported key is still being set up; nothing was recovered. '
+    + 'Click Start session to resume its setup',
+  session_exists: 'The session for the imported key is bound to a different proof and cannot be recovered here',
+  session_unbound: 'The session for the imported key predates signed enrollment and cannot be recovered here',
+});
+
+/** Own-key lookup only: codes like `constructor` or `__proto__` never match. */
+function recoveryRefusal(code) {
+  return typeof code === 'string' && Object.hasOwn(RECOVERY_REFUSALS, code) ? RECOVERY_REFUSALS[code] : undefined;
 }
 
 function describe(error) {

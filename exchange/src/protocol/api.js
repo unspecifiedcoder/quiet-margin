@@ -13,10 +13,12 @@ const TIMEOUT_MS = 60_000;
 const ACCOUNT_ID = /^(?=.{2,64}$)(([a-z\d]+[-_])*[a-z\d]+\.)*([a-z\d]+[-_])*[a-z\d]+$/;
 
 export class ApiError extends Error {
-  constructor(message, status) {
+  constructor(message, status, code) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
+    /** The server's machine-readable `error` code, when it sent one. */
+    if (typeof code === 'string') this.code = code;
   }
 }
 
@@ -204,7 +206,8 @@ export class Api {
     }
     if (!response.ok) {
       const message = typeof json?.error === 'string' ? json.error : (typeof json?.message === 'string' ? json.message : text.slice(0, 200));
-      throw new ApiError(`exchange server ${method} ${path} failed (${response.status}): ${message}`, response.status);
+      const code = typeof json?.error === 'string' && /^[a-z_]{1,40}$/.test(json.error) ? json.error : undefined;
+      throw new ApiError(`exchange server ${method} ${path} failed (${response.status}): ${message}`, response.status, code);
     }
     if (json === null) throw new ApiError('exchange server returned no JSON', response.status);
     return json;
@@ -214,8 +217,19 @@ export class Api {
    * Enrolls the browser key. `proof` is the canonical padded Base64 Ed25519
    * signature of `sessionProofMessage(publicKey)` by that same key, so the
    * server can bind the session to the key holder and replay it on retry.
+   *
+   * With `{ recoverOnly: true }` the body also carries `restore_only: true`:
+   * the server then only returns the existing ready session bound to this
+   * key and proof, and refuses (404 none, 409 not ready or bound elsewhere)
+   * rather than allocating a new trader account. Without it the body is
+   * exactly `{public_key, proof}`, as before.
    */
-  async createSession(publicKey, proof) {
+  async createSession(publicKey, proof, options = {}) {
+    if (options === null || typeof options !== 'object' || Array.isArray(options)) {
+      throw new ApiError('bad session options');
+    }
+    const { recoverOnly = false, ...rest } = options;
+    if (typeof recoverOnly !== 'boolean' || Object.keys(rest).length !== 0) throw new ApiError('bad session options');
     if (!isEd25519PublicKey(publicKey)) throw new ApiError('bad public key');
     let raw;
     try {
@@ -224,8 +238,8 @@ export class Api {
       raw = null;
     }
     if (!raw || toBase64(raw) !== proof) throw new ApiError('bad session proof');
-    const session = parseSession(await this.request('POST', '/sessions', { public_key: publicKey, proof },
-      { auth: false, invite: true }));
+    const body = recoverOnly ? { public_key: publicKey, proof, restore_only: true } : { public_key: publicKey, proof };
+    const session = parseSession(await this.request('POST', '/sessions', body, { auth: false, invite: true }));
     this.sessionId = session.session_id;
     return session;
   }
