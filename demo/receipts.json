@@ -54,13 +54,6 @@
     "maker_band_percent": 1,
     "maker_band_source": "off-chain demo maker policy in tests/actor.mjs makerApproval(); not enforced by the contract"
   },
-  "oracle_rounds": [
-    { "round": 1, "price_ticks": 10000, "funding_cents": 0 },
-    { "round": 2, "price_ticks": 12000, "funding_cents": 200 },
-    { "round": 3, "price_ticks": 10000, "funding_cents": 200 },
-    { "round": 4, "price_ticks": 7000, "funding_cents": 400 },
-    { "round": 5, "price_ticks": 5200, "funding_cents": 400 }
-  ],
   "synthetic_fixture": {
     "source": "published tests/actor.mjs prepare() defaults, used by scripts/testnet-demo.mjs for both positions. The maker sees size and entry; the trader and both keepers see the full witness. Blinders are never published in plaintext.",
     "size_lots": 10,

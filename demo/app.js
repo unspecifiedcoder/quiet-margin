@@ -13,7 +13,22 @@ const data = await fetch('receipts.json').then((response) => {
 
 const { units, accounts, market, network } = data;
 const tx = Object.fromEntries(data.transactions.map((entry) => [entry.id, entry]));
-const round = (n) => data.oracle_rounds.find((r) => r.round === n);
+// Oracle rounds come only from each transaction's expect.oracle, the values the
+// verifier checks against get_oracle at that transaction's block.
+const rounds = new Map();
+for (const { id, expect } of data.transactions) {
+  if (!expect.oracle) continue;
+  const seen = rounds.get(expect.oracle.round);
+  if (seen && JSON.stringify(seen) !== JSON.stringify(expect.oracle)) {
+    throw new Error(`receipts.json: ${id} disagrees on oracle round ${expect.oracle.round}`);
+  }
+  rounds.set(expect.oracle.round, expect.oracle);
+}
+const round = (n) => {
+  const record = rounds.get(n);
+  if (!record) throw new Error(`receipts.json: no transaction records oracle round ${n}`);
+  return record;
+};
 const fixture = data.synthetic_fixture;
 
 // ---------------------------------------------------------------- formatting
