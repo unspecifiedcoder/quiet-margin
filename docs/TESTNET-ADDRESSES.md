@@ -47,8 +47,7 @@ node scripts/testnet-demo.mjs run
 
 The deployment command verifies any existing code and keys. The demo command
 opens and settles new positions on an empty, funded market and records its
-transactions in `.testnet/demo-<starting-nonce>.json`. Public deployment and
-fixture receipts will be recorded here after verification.
+transactions in `.testnet/demo-<starting-nonce>.json`.
 
 If a run stops with an active built-in demo position, run
 `node scripts/testnet-demo.mjs resume-active` to settle it using the matching
