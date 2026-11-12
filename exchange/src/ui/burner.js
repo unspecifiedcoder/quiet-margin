@@ -17,8 +17,11 @@
 
 import { shortHash } from './format.js';
 
-/** A backup is a small JSON document; anything larger is not one. */
-export const MAX_BACKUP_BYTES = 16 * 1024;
+/**
+ * A backup is a small ASCII JSON document; anything larger is not one. Matches
+ * MAX_BACKUP_LENGTH (1024) in protocol/burner-wallet.js, which rejects longer text.
+ */
+export const MAX_BACKUP_BYTES = 1024;
 const NETWORK_LABEL = 'NEAR testnet';
 const IMPORT_FAILED = 'That file is not a usable burner backup for this site. A backup only works on the site that made it; choose the JSON file you downloaded here.';
 
@@ -169,48 +172,47 @@ export function startBurnerRoute(root, {
     r.create,
     h('p', { class: 'xc-bw__or', 'aria-hidden': 'true', text: 'or' }),
     r.file, r.fileLabel,
-    h('p', { class: 'xc-field__hint', id: `${id}-file-hint`, text: `A JSON backup downloaded from this same site, up to ${MAX_BACKUP_BYTES / 1024} KB. It is read in this browser only.` }),
+    h('p', { class: 'xc-field__hint', id: `${id}-file-hint`, text: `The JSON file (up to ${MAX_BACKUP_BYTES / 1024} KB) downloaded from this same site. It is read in this browser only.` }),
     h('details', { class: 'xc-disclose' },
       h('summary', { text: 'What a private wallet is' }),
       h('ul', { class: 'xc-list' },
-        h('li', { text: 'A burner is a NEAR testnet implicit account created in this browser: a demo wallet with mock mUSDC and no cash value.' }),
+        h('li', { text: 'A burner is a NEAR testnet implicit account created in this browser.' }),
         h('li', { text: 'Signing happens locally and sends nothing on chain. It opens a private trading wallet: a separate trader, not your burner address.' }),
         h('li', { text: 'The coordinator then provisions that trader on testnet, or reattaches it when you recover.' }),
         h('li', { text: 'A backup recovers the same wallet only on this same site (origin), in any browser.' }),
         h('li', { text: 'A position opening stays in the browser that made it. Keep that browser to close an active position voluntarily.' }))));
 
-  // ---------- wallet: identity, backup, request, sign ----------
+  // ---------- wallet: authorization summary and sign first, backup second ----------
   r.account = h('code', { class: 'xc-bw__mono' });
-  r.backupBtn = h('button', { type: 'button', class: 'xc-btn xc-btn--act xc-btn--block', text: 'Download backup file', onclick: () => backup() });
-  r.backupState = h('p', { class: 'xc-small', 'aria-live': 'polite' });
-  r.backup = h('section', { class: 'xc-bw__sec', 'aria-labelledby': `${id}-bk-h` },
-    h('h2', { class: 'xc-bw__h', id: `${id}-bk-h` }, h('span', { class: 'xc-bw__n', 'aria-hidden': 'true', text: '1' }), 'Save the backup (recommended)'),
-    h('p', { class: 'xc-notice', text: 'The backup controls this demo wallet and its private trading wallet; anyone with it can use them. It works only on this site. This page never shows it or sends it to the server.' }),
-    r.backupBtn, r.backupState);
-
   r.reqOrigin = h('span', { class: 'xc-bw__mono' });
   r.reqRecipient = h('span', { class: 'xc-bw__mono' });
-  r.reqMessage = h('pre', { class: 'xc-bw__msg', tabindex: '0', 'aria-labelledby': `${id}-msg-h` });
+  r.reqRecipientRow = row('Recipient', r.reqRecipient);
+  r.reqMessage = h('pre', { class: 'xc-bw__msg', tabindex: '0', 'aria-label': 'Full signed text' });
   r.reqWait = h('p', { class: 'xc-muted xc-small' });
-  r.reqBody = h('div', { class: 'xc-bw__req' },
-    h('dl', { class: 'xc-rows' },
-      row('Site', r.reqOrigin),
-      row('Network', NETWORK_LABEL),
-      row('Recipient', r.reqRecipient)),
-    h('p', { class: 'xc-label', id: `${id}-msg-h`, text: 'Message to sign' }),
+  r.reqFull = h('details', { class: 'xc-disclose' },
+    h('summary', { text: 'Show the full signed text' }),
     r.reqMessage);
   r.sign = h('button', { type: 'button', class: 'xc-btn xc-btn--act xc-btn--block', onclick: () => sign(), 'aria-describedby': `${id}-sign-note` });
   r.signNote = h('p', { class: 'xc-small xc-muted', id: `${id}-sign-note` });
-  r.signStepN = h('span', { class: 'xc-bw__n', 'aria-hidden': 'true', text: '2' });
-  r.signSec = h('section', { class: 'xc-bw__sec', 'aria-labelledby': `${id}-sg-h` },
-    h('h2', { class: 'xc-bw__h', id: `${id}-sg-h` }, r.signStepN, 'Review and sign'),
-    r.reqWait, r.reqBody, r.sign, r.signNote);
+  r.signSec = h('section', { class: 'xc-bw__sign', 'aria-labelledby': `${id}-sg-h` },
+    h('h2', { class: 'xc-bw__h', id: `${id}-sg-h`, text: 'You are signing' }),
+    h('dl', { class: 'xc-rows xc-bw__ids' },
+      row('Site', r.reqOrigin),
+      row('Network', NETWORK_LABEL),
+      row('Burner', r.account),
+      r.reqRecipientRow),
+    r.reqWait, r.reqFull, r.sign, r.signNote);
+
+  r.backupBtn = h('button', { type: 'button', class: 'xc-btn xc-btn--ghost xc-btn--block', text: 'Download backup file', onclick: () => backup() });
+  r.backupState = h('p', { class: 'xc-small', 'aria-live': 'polite' });
+  r.backup = h('section', { class: 'xc-bw__sec', 'aria-labelledby': `${id}-bk-h` },
+    h('h2', { class: 'xc-bw__h', id: `${id}-bk-h`, text: 'Backup (optional)' }),
+    r.backupState,
+    r.backupBtn,
+    h('p', { class: 'xc-small xc-muted', text: 'Anyone with the file controls this demo wallet. It works only on this site and is never shown or sent to the server.' }));
   r.discard = h('button', { type: 'button', class: 'xc-link', text: 'Use a different wallet', onclick: () => discard() });
   r.walletView = h('div', { class: 'xc-bw__wallet' },
-    h('dl', { class: 'xc-rows xc-bw__ids' },
-      row('Burner account', r.account),
-      row('Network', NETWORK_LABEL)),
-    r.backup, r.signSec,
+    r.signSec, r.backup,
     h('p', { class: 'xc-bw__alt' }, r.discard));
 
   // ---------- shared: heading, status, alert ----------
@@ -254,13 +256,13 @@ export function startBurnerRoute(root, {
 
     if (!has) {
       setText(r.title, 'Trade from a private wallet');
-      setText(r.lead, 'Create a NEAR testnet burner, or recover one from a backup made on this site. You then sign one readable request, locally, to open your private trading wallet.');
+      setText(r.lead, 'Create a NEAR testnet burner, or recover one from a backup made on this site, then sign one readable request locally.');
     } else if (s.mode === 'new') {
       setText(r.title, 'New burner wallet');
-      setText(r.lead, 'Download the backup, then sign locally to open this burner\'s private trading wallet. Its testnet trader is provisioned after that.');
+      setText(r.lead, 'Sign locally to open this burner\'s private trading wallet.');
     } else {
       setText(r.title, 'Burner wallet recovered');
-      setText(r.lead, 'Sign locally to reopen this burner\'s private trading wallet. Its existing testnet trader is then reattached; nothing new is created.');
+      setText(r.lead, 'Sign locally to reopen this burner\'s private trading wallet.');
     }
 
     r.create.disabled = busy;
@@ -274,23 +276,22 @@ export function startBurnerRoute(root, {
       setText(r.account, s.wallet.accountId);
       const isNew = s.mode === 'new';
       r.backup.hidden = !isNew;
-      r.signStepN.hidden = !isNew;
       r.backupBtn.disabled = busy;
-      r.backupBtn.className = `xc-btn xc-btn--block ${s.backedUp ? 'xc-btn--ghost' : 'xc-btn--act'}`;
       setText(r.backupBtn, s.backedUp ? 'Download backup again' : 'Download backup file');
       // The page cannot see whether the browser saved the file, only that the
       // download was requested.
       setText(r.backupState, s.backedUp
-        ? `Download requested (${s.backupName}). Check that the file saved and keep it private.`
-        : 'Optional, but without it this burner is lost when you leave this page.');
+        ? `Download requested (${s.backupName}). Check that it saved and keep it private.`
+        : 'Without a backup, this burner is lost for good when you leave this page.');
       r.backupState.className = `xc-small ${s.backedUp ? 'is-pos' : 'is-warn'}`;
 
       const req = s.request;
-      r.reqBody.hidden = !req;
+      setText(r.reqOrigin, origin);
+      r.reqRecipientRow.hidden = !req;
+      r.reqFull.hidden = !req;
       r.reqWait.hidden = Boolean(req);
       setText(r.reqWait, s.busy === 'request' ? 'Preparing the request…' : s.requestError ? 'The request could not be prepared.' : '');
       if (req) {
-        setText(r.reqOrigin, origin);
         setText(r.reqRecipient, String(req.recipient ?? ''));
         setText(r.reqMessage, String(req.message ?? ''));
       }
@@ -298,8 +299,8 @@ export function startBurnerRoute(root, {
       r.sign.disabled = busy || !req || opened;
       setText(r.sign, s.busy === 'sign' ? 'Signing…' : label);
       setText(r.signNote, isNew
-        ? 'Signing is local and sends no transaction. Afterwards the coordinator provisions this wallet\'s testnet trader with demo mUSDC.'
-        : 'Signing is local and sends no transaction. Afterwards the coordinator reattaches this wallet\'s existing testnet trader; it never creates one.');
+        ? 'Local signature, no transaction. The coordinator then provisions this wallet\'s testnet trader.'
+        : 'Local signature, no transaction. The coordinator then reattaches the existing testnet trader; it never creates one.');
       r.discard.disabled = busy;
     }
 

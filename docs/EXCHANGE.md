@@ -174,15 +174,18 @@ visible in every state, including for a browser already connected on the
 default route; that session is not changed.
 
 1. **Create burner wallet** or **Recover from a backup file**. The file is a
-   local JSON file of at most 16 KB, read only in the browser.
-2. For a new burner, **Download backup file** (recommended, not required).
-   The page reports only **Download requested**: it cannot confirm the
-   browser saved the file, so check it. The backup controls the demo wallet
-   and its private trading wallet. The page never shows it, logs it or sends
-   it to the server.
-3. Review the readable request (site, network, recipient, message), then
-   **Sign and open private wallet** (new) or **Sign and recover private
-   wallet** (backup). Signing happens locally and sends no transaction.
+   local JSON file of at most 1 KB (1024 characters), read only in the
+   browser.
+2. Review the compact summary (site, network, burner, recipient; the full
+   signed text is under **Show the full signed text**), then **Sign and open
+   private wallet** (new) or **Sign and recover private wallet** (backup).
+   Signing happens locally and sends no transaction.
+3. For a new burner, **Download backup file** below the sign button is
+   optional, but without it the burner is lost when you leave the page. The
+   page reports only **Download requested**: it cannot confirm the browser
+   saved the file, so check it. The backup controls the demo wallet and its
+   private trading wallet. The page never shows it, logs it or sends it to
+   the server.
 4. The original trading workspace opens, with the burner account, the private
    trader account and the trader key shown above it. Only then does the
    coordinator act on testnet: a new wallet provisions its trader account
@@ -193,9 +196,9 @@ default route; that session is not changed.
    the banner above the workspace.
 
 Backups are bound to the site origin that made them, and recover only on that
-same origin. On a hosted invite-only testnet instance, recovery also enrolls
-through `POST /api/sessions`, so it needs the private invite like any new
-session: in the other browser, open the invite link first (the invite is kept
+same origin. On a hosted invite-only testnet instance, recovery uses
+`POST /api/sessions` with `restore_only: true`, so it needs the private
+invite like any new session: in the other browser, open the invite link first (the invite is kept
 for that tab only), then follow **Private wallet** in the same tab and
 **Recover from a backup file**. Without the invite, recovery fails with
 `invite_required` and nothing is created.
