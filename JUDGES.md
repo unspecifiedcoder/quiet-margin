@@ -1,14 +1,42 @@
 # Quiet Margin judge guide
 
 Quiet Margin is a native NEAR clearing contract for a confidential
-BTC/mock-USDC long position. Size, entry, and margin are hidden behind a
-salted commitment. Groth16 proofs, checked on chain through the NEP-488
+BTC/mock-USDC long position. The open transaction carries no plaintext exact
+size, entry, or margin. Staging stores encrypted openings for the keepers.
+The [privacy limits](#5-threat-model-and-limits) cover what the maker, keepers,
+and public observers can learn. Groth16 proofs, checked on chain through the NEP-488
 BLS12-381 host functions, gate opening, voluntary close, and keeper
 liquidation. Either of two keepers can liquidate alone from an encrypted
 copy of the opening stored on chain, so liquidation works while the trader
 is offline.
 
-Everything below runs on Windows or Linux with Node 22 and no npm install.
+## First look
+
+[Watch the Quiet Margin demo](docs/media/quiet-margin-demo.mp4). It shows burner creation, local signing, recovery in a fresh browser, deposit, open, close, and withdrawal. The split view shows the trader terminal beside the explorer for the same open.
+
+### Public testnet explorer
+
+| Run | Step | Link |
+| --- | --- | --- |
+| Browser burner app | Deposit 600 mUSDC | [Deposit](https://testnet.near.rocks/tx/3XPCMQMkxQnHcRFv5yTBxk4J6zVXPjb3qwCnG9rwF9hd) |
+| Browser burner app | Open, signed and proved in the browser | [Open](https://testnet.near.rocks/tx/3yVTY63LVDGnKSzGohorQXfwWeYvoiorZRBvhX1iLi8b) in [block 277375833](https://testnet.near.rocks/block/277375833) |
+| Browser burner app | Close, then withdraw 20 mUSDC | [Close](https://testnet.near.rocks/tx/A67nEyP4THpeRruJrLZYf65TupaMWYDA29GGHythGkx6), [withdrawal](https://testnet.near.rocks/tx/EWkWUg8PiUHrJFrvoTDy4aaQheaf96sWi1qZVCC4fVhF) |
+| Earlier operator-driven run (replayed below) | Healthy liquidation proof rejected (`ERR_PROOF_INVALID`) | [tx `GsbCfnM5…BTpW`](https://testnet.near.rocks/tx/GsbCfnM5Z8dyHgPV9VT5ns75HWkfxsmtD3ynYZZVBTpW) |
+| Earlier operator-driven run (replayed below) | Cold Keeper B liquidation succeeds | [tx `BDRSCJmv…7MYW`](https://testnet.near.rocks/tx/BDRSCJmvMfzCGwtsbtgvwpd1CKaqpZkmFcTj7Gwu7MYW) |
+
+The rejection and the Keeper B success are a pair from the same position in
+a separate run from the browser open.
+
+### Try it
+
+1. **Testnet consumer app.** The real app in [`exchange/`](exchange/). Its
+   funded coordinator runs locally and needs operator setup and keys, so the
+   video and the open link above stand in for it
+   ([`docs/EXCHANGE.md`](docs/EXCHANGE.md)).
+2. **Credential-free evidence.** Sections 1 and 2: a read-only replay and a
+   strict receipt check. Node 22 on Windows or Linux, no install, no keys.
+3. **Reproducible source.** Section 3: one Linux command builds everything
+   and runs the funded scenario in a local NEAR Sandbox.
 
 ## 1. Watch the testnet replay (2 minutes)
 
@@ -50,7 +78,7 @@ plaintext.
 ## 2. Check the receipts yourself (1 minute)
 
 ```text
-node scripts/verify-demo-receipts.mjs
+node scripts/verify-demo-receipts.mjs --strict
 ```
 
 The verifier reads [`demo/receipts.json`](demo/receipts.json), the same
@@ -83,7 +111,7 @@ fail too.
 
 ## 3. Reproduce from source in NEAR Sandbox
 
-On Linux x86-64 with rustup, Node 22.10.0, npm, curl, and tar, from a clean
+On Ubuntu 24.04 x86-64 with rustup, Node 22.10.0, npm, curl, and tar, from a clean
 checkout:
 
 ```bash
@@ -93,12 +121,12 @@ bash scripts/sandbox.sh
 The script downloads checksum-pinned cargo-near 0.23.0 and NEAR Sandbox
 2.14.0, builds both Wasm contracts and the Rust prover, runs the funded
 Sandbox scenario, and then runs the Rust suites. It needs no wallet, RPC key,
-or external price feed. The pinned Sandbox binary has no Windows build. On
-Windows, run the same command through the repository's
-[Sandbox workflow](.github/workflows/sandbox.yml). A freshly verified private
-run is
+or external price feed. The pinned Sandbox binary needs Linux x86-64 with glibc 2.39 or newer. On
+Windows, use Ubuntu 24.04 in WSL or the repository's
+[Sandbox workflow](.github/workflows/sandbox.yml). Provenance only: a run
+recorded while the repository was private is
 [actions/runs/43179059728](https://github.com/unspecifiedcoder/xythum-near-perps/actions/runs/43179059728).
-A clean Linux checkout is the reproducible alternative. The Sandbox scenario prints one JSON summary line, then the Node
+A clean Linux checkout is the reproducible path. The Sandbox scenario prints one JSON summary line, then the Node
 test runner reports one passing test. In a terminal it looks like this:
 
 ```text
@@ -170,9 +198,14 @@ reviewed run.
   `e5cbe25965ec546ac6e691704d9c176137cf561c`. It was used read-only as a
   design baseline. That design exposes position parameters in the clearing
   house and uses zero knowledge for note operations. This repository is a new
-  native NEAR clearing contract with new proof statements. The baseline is
+  native NEAR clearing contract with new proof statements; no Solidity
+  contracts or circuits were reused. The exchange UI reuses the baseline's
+  layout and visual language only
+  ([design provenance](docs/EXCHANGE.md#design-provenance)). The baseline is
   private and was excluded from the implementation worktrees.
-  See [`docs/SPEC.md`](docs/SPEC.md#baseline-and-scope).
+  See [`docs/SPEC.md`](docs/SPEC.md#baseline-and-scope) and the
+  [README](README.md#hackathon-changes-and-prior-work) for the
+  new-code map and a diff command.
 - The verifier follows [NEP-488](https://github.com/near/NEPs/blob/master/neps/nep-0488.md).
   The public [Antumbra Groth16 verifier](https://github.com/Valentine1898/antumbra/blob/d684c3e380cb0da47cad16803741cff16861bb8d/contracts/pool/src/groth16.rs)
   was a reference only. No Antumbra code was copied

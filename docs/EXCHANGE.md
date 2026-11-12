@@ -157,13 +157,13 @@ has **not** been tested.
 - **Settlement inference.** A close or liquidation publishes the refund and
   any bad debt. Together with size, entry, and the public mark, this lets an
   observer infer margin after settlement.
-- **Browser-local custody, no recovery.** The signing key and the sealed
+- **Default route custody.** The signing key and the sealed
   opening (AES-GCM under a non-extractable vault key,
   `exchange/src/protocol/store.js`) exist only in this browser origin. There
   is no export. If you clear site data or switch browser or profile, you lose
   the ability to sign deposits, withdrawals, and voluntary closes. The keepers
   can still liquidate from their encrypted copy if the mark crosses
-  liquidation.
+  liquidation. The private wallet route below supports signing-key recovery.
 
 ### Private wallet (`?wallet=burner`)
 
