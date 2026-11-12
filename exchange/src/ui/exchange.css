@@ -67,17 +67,12 @@ html, body { margin: 0; background: #101721; }
   background: var(--ground);
   position: sticky; top: 0; z-index: 20;
 }
-.xc-brand { display: flex; align-items: center; gap: 10px; font-weight: 650; font-size: 16px; letter-spacing: 0.005em; }
-.xc-brand__x {
-  position: relative; flex: none; width: 28px; height: 28px; border-radius: 7px;
-  background: var(--well); border: 1px solid var(--line-2);
-}
-.xc-brand__x::before, .xc-brand__x::after {
-  content: ''; position: absolute; left: 50%; top: 50%; width: 3px; height: 17px; border-radius: 2px;
-}
-.xc-brand__x::before { background: var(--act); transform: translate(-50%, -50%) rotate(45deg); }
-.xc-brand__x::after { background: var(--ink); transform: translate(-50%, -50%) rotate(-45deg); }
-.xc-brand__sub { color: var(--muted); font-weight: 500; }
+.xc-brand { display: flex; align-items: center; gap: 10px; font-weight: 650; font-size: 16px; letter-spacing: 0.005em; white-space: nowrap; }
+/* Two-bar mark: a full ink bar beside a shorter action bar, bottom-aligned. */
+.xc-brand__mark { display: inline-flex; align-items: flex-end; gap: 3px; flex: none; height: 16px; }
+.xc-brand__mark::before, .xc-brand__mark::after { content: ''; width: 4px; border-radius: 1px; }
+.xc-brand__mark::before { height: 100%; background: var(--ink); }
+.xc-brand__mark::after { height: 62%; background: var(--act); }
 .xc-top__ctx { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .xc-tag {
   display: inline-flex; align-items: center; gap: 7px; padding: 3px 10px; min-height: 26px;
@@ -559,8 +554,8 @@ html, body { margin: 0; background: #101721; }
     --chart-tag-fill: Canvas; --chart-tag-stroke: CanvasText; --chart-entry: GrayText; --chart-liq: Highlight;
     --chart-cross: Highlight; --chart-halo: Canvas;
   }
-  .xc-brand__x { forced-color-adjust: none; background: Canvas; border-color: CanvasText; }
-  .xc-brand__x::before, .xc-brand__x::after { background: CanvasText; }
+  .xc-brand__mark { forced-color-adjust: none; }
+  .xc-brand__mark::before, .xc-brand__mark::after { background: CanvasText; }
   .xc-meter__fill { background: Highlight; }
   .xc-step.is-current, .xc-step.is-done { border-bottom-color: Highlight; }
   .xc-ticket[data-phase='fund'] .xc-fund { box-shadow: none; border-left: 3px solid Highlight; }

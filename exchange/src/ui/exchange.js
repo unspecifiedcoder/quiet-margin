@@ -96,8 +96,8 @@ export function mountExchange(root, handlers = {}, options = {}) {
   r.who = h('div', { class: 'xc-who' }, r.sessionId, r.custody);
   const top = h('header', { class: 'xc-top' },
     h('div', { class: 'xc-brand' },
-      h('span', { class: 'xc-brand__x', 'aria-hidden': 'true' }),
-      h('span', { class: 'xc-brand__name' }, 'Xythum', h('span', { class: 'xc-brand__sub', text: ' Perps' }))),
+      h('span', { class: 'xc-brand__mark', 'aria-hidden': 'true' }),
+      h('span', { class: 'xc-brand__name', text: 'Quiet Margin' })),
     h('div', { class: 'xc-top__ctx' },
       r.network,
       h('span', { class: 'xc-tag', title: `${COLLATERAL} is a mock token on a test network with no cash value.` }, h('strong', { text: COLLATERAL }), ' mock collateral')),

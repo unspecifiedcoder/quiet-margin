@@ -116,8 +116,8 @@ function createConfirm(host) {
 function topBar(...extra) {
   return h('header', { class: 'xc-top' },
     h('div', { class: 'xc-brand' },
-      h('span', { class: 'xc-brand__x', 'aria-hidden': 'true' }),
-      h('span', { class: 'xc-brand__name' }, 'Xythum', h('span', { class: 'xc-brand__sub', text: ' Perps' }))),
+      h('span', { class: 'xc-brand__mark', 'aria-hidden': 'true' }),
+      h('span', { class: 'xc-brand__name', text: 'Quiet Margin' })),
     h('div', { class: 'xc-top__ctx' },
       h('span', { class: 'xc-tag xc-net is-testnet' }, h('span', { class: 'xc-dot', 'aria-hidden': 'true' }), NETWORK_LABEL),
       h('span', { class: 'xc-tag' }, h('strong', { text: 'Private wallet' })),
