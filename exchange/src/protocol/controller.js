@@ -98,6 +98,53 @@ function ticksArg(value) {
   return M.usdToTicks(value);
 }
 
+/** Upper bound of the on-chain cumulative funding index (`u32` cents). */
+const MAX_FUNDING_INDEX_CENTS = 0xFFFF_FFFF;
+
+/**
+ * The opening terms the user confirmed: `{ priceTicks, fundingCents }`, the
+ * oracle mark and cumulative funding index shown at review. Absent (`null`
+ * or `undefined`) only for callers that predate review; anything else must
+ * be exact integers in the on-chain ranges.
+ */
+function reviewedQuoteArg(value) {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError('reviewedQuote must be { priceTicks, fundingCents }');
+  }
+  const { priceTicks, fundingCents } = value;
+  if (!Number.isSafeInteger(priceTicks) || priceTicks < 1 || priceTicks > M.MAX_TICKS) {
+    throw new RangeError(`reviewedQuote.priceTicks must be an integer in 1..=${M.MAX_TICKS}`);
+  }
+  if (!Number.isSafeInteger(fundingCents) || fundingCents < 0 || fundingCents > MAX_FUNDING_INDEX_CENTS) {
+    throw new RangeError(`reviewedQuote.fundingCents must be an integer in 0..=${MAX_FUNDING_INDEX_CENTS}`);
+  }
+  return { priceTicks, fundingCents };
+}
+
+const quoteUsd = (ticks) => '$' + (ticks * M.TICK_USD).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+/**
+ * Refuses terms other than the reviewed ones. The opening mark and the
+ * funding checkpoint are both fixed by the oracle round at staging, and
+ * `open` requires the oracle to still carry exactly those two values, so a
+ * new round with the same price and funding index keeps the review valid.
+ */
+function assertReviewed(reviewed, priceTicks, fundingCents) {
+  if (!reviewed || (reviewed.priceTicks === priceTicks && reviewed.fundingCents === fundingCents)) return;
+  const changes = [];
+  if (reviewed.priceTicks !== priceTicks) {
+    changes.push(`entry price ${quoteUsd(reviewed.priceTicks)} → ${priceTicks == null ? 'none' : quoteUsd(priceTicks)}`);
+  }
+  if (reviewed.fundingCents !== fundingCents) {
+    changes.push(`funding index ${reviewed.fundingCents} → ${fundingCents ?? 'none'} cents`);
+  }
+  const error = new Error(`the quote changed after you reviewed it (${changes.join(', ')}); `
+    + 'nothing was signed at the new terms. Review the new quote and confirm again to open');
+  error.reviewRequired = { reviewed, current: { priceTicks, fundingCents } };
+  throw error;
+}
+
 function canonical(value) {
   if (Array.isArray(value)) return '[' + value.map(canonical).join(',') + ']';
   if (value && typeof value === 'object') {
@@ -759,12 +806,18 @@ export class ExchangeController {
   // Open.
   // ------------------------------------------------------------------
 
+  /**
+   * `{ sizeBtc | lots, marginUsd | marginCents, reviewedQuote?: { priceTicks, fundingCents } }`.
+   * With `reviewedQuote`, nothing is staged or signed unless the opening's
+   * mark and funding checkpoint equal the reviewed ones exactly.
+   */
   onOpen(params) {
     return this.run('Opening position', async () => {
       const lots = lotsArg(params);
       const margin = centsArg(Number.isSafeInteger(params?.marginCents) ? { cents: params.marginCents } : params?.marginUsd,
         'margin', M.MAX_MARGIN_CENTS);
-      await this.open(lots, margin);
+      const reviewed = reviewedQuoteArg(params?.reviewedQuote);
+      await this.open(lots, margin, reviewed);
     });
   }
 
@@ -772,15 +825,21 @@ export class ExchangeController {
     this.emit({ proofStatus });
   }
 
-  async open(lots, margin) {
+  async open(lots, margin, reviewed = null) {
     let chain = await this.refresh();
     this.assertCanOpen(chain);
     let record = await this.resumableOpening(chain, lots, margin);
 
-    if (!record) {
+    if (record) {
+      // A resumable opening is kept for a later matching review: its terms
+      // still equal the oracle, so it can resume without reproving.
+      assertReviewed(reviewed, record.open_price_ticks, record.funding_checkpoint);
+    } else {
       // Stage against a fresh round so the opening survives proving time.
       chain = await this.freshChain(chain);
       this.assertCanOpen(chain);
+      // After the final pre-proving refresh: the opening takes these terms.
+      assertReviewed(reviewed, chain.oracle.price_ticks, chain.oracle.funding_cents);
       record = await this.prepareOpening(chain, lots, margin);
     }
 
@@ -808,6 +867,8 @@ export class ExchangeController {
         await this.store.delete(OPENING);
         throw new Error('the oracle moved after proving; open again to prove against the new mark');
       }
+      // Staging snapshots the live oracle, so it is checked again right before signing.
+      assertReviewed(reviewed, o.price_ticks, o.funding_cents);
       this.progress('Staging the commitment');
       await this.ctx.chain.call('stage', this.ctx.session.market_id, [functionCall('stage_position', {
         nonce: record.nonce, commitment: record.commitment, quote_terms: record.quote_terms,
@@ -819,6 +880,9 @@ export class ExchangeController {
         throw new Error('the staged opening differs from this proof (oracle moved during staging); open again');
       }
     }
+
+    // The finalized pending slot carries the terms `open` will settle against.
+    assertReviewed(reviewed, chain.pending.open_price_ticks, chain.pending.funding_checkpoint);
 
     let acks = record.acknowledgments;
     if (!this.quoteMatches(chain.quote, record, chain.height) || !acks) {
@@ -840,6 +904,12 @@ export class ExchangeController {
       await this.verifyAcks(acks, chain.pending, record);
     }
 
+    if (reviewed) {
+      // `open` settles at the oracle carried at execution; a moved mark or
+      // funding index since staging needs a new review, not a signature.
+      chain = await this.refresh();
+      assertReviewed(reviewed, chain.oracle?.price_ticks, chain.oracle?.funding_cents);
+    }
     if (chain.ledger.trader_available < M.ESCROW_CENTS) throw new Error('available balance fell below the escrow');
     this.progress('Opening on chain');
     await this.ctx.chain.call('open', this.ctx.session.market_id, [functionCall('open', {

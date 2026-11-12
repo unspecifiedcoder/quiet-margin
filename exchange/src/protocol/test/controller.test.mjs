@@ -760,3 +760,164 @@ test('a forged session proof is refused by the server', async () => {
   assert.equal(await c.controller.onStart(), false);
   assert.match(c.last().error, /401/);
 });
+
+// ------------------------------------------------------- reviewed quote
+
+/** Started, marked at 100,000 and funded; returns the quote the UI shows for review. */
+async function reviewing(world) {
+  const c = await started(world);
+  assert.equal(await c.controller.onSetMark(100_000), true, c.last().error);
+  assert.equal(await c.controller.onDeposit(600), true, c.last().error);
+  const { price_ticks: priceTicks, funding_cents: fundingCents } = c.last().oracle;
+  return { ...c, reviewedQuote: { priceTicks, fundingCents } };
+}
+
+const openJobs = (world) => world.prover.jobs.filter((j) => j.kind === 'open');
+const ORDER = { sizeBtc: 0.01, marginUsd: 500 };
+
+test('a reviewed quote opens at exactly the reviewed price and funding checkpoint', async () => {
+  const world = await createWorld();
+  const { w } = world;
+  const { controller, last, reviewedQuote } = await reviewing(world);
+  assert.deepEqual(reviewedQuote, { priceTicks: 10_000, fundingCents: 0 });
+  assert.equal(await controller.onOpen({ ...ORDER, reviewedQuote }), true, last().error);
+  assert.deepEqual(methodsCalled(w, IDS.trader), ['ft_transfer_call', 'stage_position', 'open']);
+  assert.equal(w.active.funding_checkpoint, 0);
+  assert.equal(last().position.entryUsd, 100_000);
+});
+
+test('invalid reviewed quotes are refused before any request or signature', async () => {
+  const world = await createWorld();
+  const { w } = world;
+  const { controller, last } = await reviewing(world);
+  const calls = w.calls.length;
+  const bodies = w.serverBodies.length;
+  for (const [reviewedQuote, pattern] of [
+    [{ priceTicks: '10000', fundingCents: 0 }, /priceTicks/],
+    [{ priceTicks: 10_000.5, fundingCents: 0 }, /priceTicks/],
+    [{ priceTicks: 0, fundingCents: 0 }, /priceTicks/],
+    [{ priceTicks: 20_001, fundingCents: 0 }, /priceTicks/],
+    [{ priceTicks: 10_000 }, /fundingCents/],
+    [{ priceTicks: 10_000, fundingCents: -1 }, /fundingCents/],
+    [{ priceTicks: 10_000, fundingCents: 2 ** 32 }, /fundingCents/],
+    [[10_000, 0], /reviewedQuote must be/],
+    ['10000', /reviewedQuote must be/],
+  ]) {
+    assert.equal(await controller.onOpen({ ...ORDER, reviewedQuote }), false, JSON.stringify(reviewedQuote));
+    assert.match(last().error, pattern);
+  }
+  assert.equal(w.calls.length, calls, 'nothing signed');
+  assert.equal(w.serverBodies.length, bodies, 'nothing requested');
+  assert.equal(openJobs(world).length, 0);
+});
+
+test('a mark that moved after review is refused before proving, staging or signing', async () => {
+  const world = await createWorld();
+  const { w } = world;
+  const { controller, last, store, reviewedQuote } = await reviewing(world);
+  assert.equal(await controller.onSetMark(101_000), true, last().error);
+  assert.equal(await controller.onOpen({ ...ORDER, reviewedQuote }), false);
+  assert.match(last().error, /quote changed after you reviewed it \(entry price \$100,000\.00 → \$101,000\.00\)/);
+  assert.match(last().error, /Review the new quote and confirm again/);
+  assert.deepEqual(methodsCalled(w, IDS.trader), ['ft_transfer_call']);
+  assert.equal(openJobs(world).length, 0);
+  assert.equal(await store.getSealed('opening'), undefined, 'no opening prepared for unreviewed terms');
+
+  // A new review at the shown terms opens.
+  const fresh = { priceTicks: last().oracle.price_ticks, fundingCents: last().oracle.funding_cents };
+  assert.equal(await controller.onOpen({ ...ORDER, reviewedQuote: fresh }), true, last().error);
+  assert.equal(last().position.entryUsd, 101_000);
+});
+
+test('a funding index that moved after review is refused even at the same price', async () => {
+  const world = await createWorld();
+  const { w } = world;
+  const { controller, last, reviewedQuote } = await reviewing(world);
+  w.oracle = { ...w.oracle, round: w.oracle.round + 1, funding_cents: 7, height: w.height };
+  assert.equal(await controller.onOpen({ ...ORDER, reviewedQuote }), false);
+  assert.match(last().error, /funding index 0 → 7 cents/);
+  assert.doesNotMatch(last().error, /entry price/);
+  assert.deepEqual(methodsCalled(w, IDS.trader), ['ft_transfer_call']);
+  assert.equal(openJobs(world).length, 0);
+});
+
+test('a stale oracle refreshed to a new round at the same price and funding keeps the review', async () => {
+  const world = await createWorld();
+  const { w } = world;
+  const { controller, last, reviewedQuote } = await reviewing(world);
+  const round = w.oracle.round;
+  w.markQuota = 0;
+  w.height += 700;
+  assert.equal(await controller.onOpen({ ...ORDER, reviewedQuote }), true, last().error);
+  assert.equal(refreshes(w).length, 1);
+  assert.ok(w.oracle.round > round, 'opened under a later liveness round');
+  assert.deepEqual(methodsCalled(w, IDS.trader), ['ft_transfer_call', 'stage_position', 'open']);
+  assert.equal(last().position.entryUsd, 100_000);
+});
+
+test('an oracle move after staging and approval is caught before the open signature', async () => {
+  const world = await createWorld();
+  const { w } = world;
+  const { controller, last, store, reviewedQuote } = await reviewing(world);
+  let moves = 1;
+  // A new funding index lands as soon as the maker approval is on chain.
+  w.hooks.rpc = async () => {
+    if (w.pending?.expires_at && moves-- > 0) {
+      w.oracle = { ...w.oracle, round: w.oracle.round + 1, funding_cents: 3, height: w.height };
+    }
+    return undefined;
+  };
+  assert.equal(await controller.onOpen({ ...ORDER, reviewedQuote }), false);
+  assert.match(last().error, /funding index 0 → 3 cents/);
+  assert.deepEqual(methodsCalled(w, IDS.trader), ['ft_transfer_call', 'stage_position'], 'open never signed');
+  assert.ok(await store.getSealed('opening'), 'the staged opening is kept, not discarded');
+
+  // The stale review is refused again; a new review restages at the new checkpoint.
+  w.hooks.rpc = null;
+  assert.equal(await controller.onOpen({ ...ORDER, reviewedQuote }), false);
+  assert.match(last().error, /quote changed after you reviewed it/);
+  assert.deepEqual(methodsCalled(w, IDS.trader), ['ft_transfer_call', 'stage_position']);
+  assert.equal(await controller.onOpen({ ...ORDER, reviewedQuote: { priceTicks: 10_000, fundingCents: 3 } }), true, last().error);
+  assert.deepEqual(methodsCalled(w, IDS.trader), ['ft_transfer_call', 'stage_position', 'stage_position', 'open']);
+  assert.equal(w.active.funding_checkpoint, 3);
+});
+
+test('a staged opening resumes on retry under a new same-terms round, and only for a matching review', async () => {
+  const world = await createWorld();
+  const { w } = world;
+  const first = await reviewing(world);
+  const { reviewedQuote } = first;
+  let failures = 1;
+  w.hooks.api = async (route) => (route === 'POST /session/approve' && failures-- > 0
+    ? new Response(JSON.stringify({ error: 'maker offline' }), { status: 503 }) : null);
+  assert.equal(await first.controller.onOpen({ ...ORDER, reviewedQuote }), false);
+  assert.match(first.last().error, /maker offline/);
+  assert.ok(w.pending, 'stage landed');
+
+  // A new oracle round at the same price and funding index lands meanwhile.
+  w.oracle = { ...w.oracle, round: w.oracle.round + 1, height: w.height };
+
+  // Reload. A stale review from another tab is refused and keeps the staged opening.
+  const second = makeController(world, first.store);
+  assert.equal(await second.controller.onStart(), true, second.last().error);
+  assert.equal(await second.controller.onOpen({ ...ORDER, reviewedQuote: { priceTicks: 10_010, fundingCents: 0 } }), false);
+  assert.match(second.last().error, /entry price \$100,100\.00 → \$100,000\.00/);
+  assert.ok(await second.store.getSealed('opening'));
+
+  assert.equal(await second.controller.onOpen({ ...ORDER, reviewedQuote }), true, second.last().error);
+  assert.deepEqual(methodsCalled(w, IDS.trader), ['ft_transfer_call', 'stage_position', 'open'], 'no restage');
+  assert.equal(openJobs(world).length, 1, 'no reprove');
+  assert.equal(second.last().position.entryUsd, 100_000);
+});
+
+test('a retry after a landed open reports the active position instead of a quote change', async () => {
+  const world = await createWorld();
+  const { w } = world;
+  const { controller, last, reviewedQuote } = await reviewing(world);
+  assert.equal(await controller.onOpen({ ...ORDER, reviewedQuote }), true, last().error);
+  assert.equal(await controller.onSetMark(101_000), true, last().error);
+  assert.equal(await controller.onOpen({ ...ORDER, reviewedQuote }), false);
+  assert.match(last().error, /already active/);
+  assert.ok(last().position, 'the landed position stays reconciled');
+  assert.deepEqual(methodsCalled(w, IDS.trader), ['ft_transfer_call', 'stage_position', 'open']);
+});
