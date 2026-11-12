@@ -54,3 +54,58 @@ If a run stops with an active built-in demo position, run
 `node scripts/testnet-demo.mjs resume-active` to settle it using the matching
 fixture and save a recovery journal. Settlement leaves the resulting balances
 claimable through `withdraw`.
+
+## Verified testnet deployment
+
+The contracts are deployed and initialized on NEAR testnet. The deployed
+market source is the reviewed `ee2aa7c` contract. The testnet runner used
+the same code with the signer gas budget recorded in `0686c94`.
+
+| Deployment | Final transaction |
+| --- | --- |
+| Clearing contract and verifier initialization | `Ggk4jPYwAHhBvJ9x5hLMRvsG9YUA4M1T3JzkuihEjJLf` |
+| Mock USDC deployment and mint | `6FdjkqQKbnk62QuBWVmybeNjgZccz4H4XqhHvxaZTqKR` |
+
+- Market domain, Base64 `xBGQVL1fFbYws/wyAEhC+DCAh23EHzOYt0NVtTAqxiM=`
+- Deployment ID, Base64 `ZWr2mhFGqdZePtgDGg94LIxI3Zqm2dS/dvZRHMqCVKk=`
+- Clearing Wasm SHA-256 `9004770854c3d3a1aa8c71d7a19d258fac568abb41cda1dd2ad1827b5c80db7c`
+- Mock token Wasm SHA-256 `ed4ffe1bcf2af0bab19278c4a3c10a24bae0c625245511cf324350a6daae6477`
+
+The deployed verifying-key SHA-256 fingerprints are Base64.
+
+| Proof | Fingerprint |
+| --- | --- |
+| Open | `3sesQDTxpTB6+wdunP8crHc4Hnxv9V4TQqFQiBKIsDA=` |
+| Close | `66lAStu/S3ID1d4pkYQEJHubw9EGWDNIO+giKUDfcIs=` |
+| Liquidation | `hvfOfFq80ldBwlvMRH7dEgQfqvUeULcKpYIjnabxyOg=` |
+
+## Verified testnet lifecycle
+
+| Step | Final transaction | Observed result |
+| --- | --- | --- |
+| Trader deposit | `EwmGiURcyHe9nW8ZWwL1iEdSwgerX9eycPh3fnC5cqHi` | 600 mUSDC credited |
+| Maker deposit | `3yjK8ZpPR7aLoWs5tMxQHsXg4KRu8k3cnCDwgvzomQzs` | 1,000 mUSDC funded the vault |
+| First private open | `NuRmmJTDPeitF1rcNPU2JowbUhhGACPA4LGPN6mq7rk` | Nonce 1 active at funding checkpoint 0 |
+| Profitable close | `DXm8nbNxBHoGjSUeYho6WnC8vMBb1UmJG3pn24CaNowE` | 798 mUSDC claimable, including 198 mUSDC profit after funding |
+| Trader payout | `DxWVg4roKapKVAwD5mGZafQCGbwgVqdTodLEjqFrPV2J` | 198 mUSDC transferred from the market to the trader |
+| Second private open | `5CNs5rAr7KLh8yfTHkMY2dQ9c8zrMtJ22eM3B4xJT1c7` | Nonce 2 active at funding checkpoint 200 cents |
+| Healthy liquidation attempt | `GsbCfnM5Z8dyHgPV9VT5ns75HWkfxsmtD3ynYZZVBTpW` | `ERR_PROOF_INVALID` at the $70,000 mark |
+| Cold Keeper B liquidation | `BDRSCJmvMfzCGwtsbtgvwpd1CKaqpZkmFcTj7Gwu7MYW` | Nonce 2 settled at $52,000 while the trader and Keeper A were offline |
+| Replay | `BnTNBAHZHHG4rMh6keQ77ead2TdGfTVXyfDNrecpQek5` | `ERR_NO_ACTIVE` |
+| Keeper payout | `6Cg85J5iVzdd9QT12FSFSKFafbiTSQkdKfc6zLJtZB1m` | 1 mUSDC transferred to Keeper B |
+
+The five oracle rounds used BTC marks of $100,000, $120,000, $100,000,
+$70,000, and $52,000. The funding index advanced through 0, 200, 200, 400,
+and 400 cents. The final RPC read found an empty active slot, a 117 mUSDC
+trader claim, a 1,284 mUSDC maker vault, and zero debt or pending withdrawals.
+The market held 1,401 mUSDC, the trader wallet held 198 mUSDC, and Keeper B
+held 1 mUSDC. The successful close burned 22.370 Tgas and the successful
+liquidation burned 22.383 Tgas, including transaction receipts.
+
+The local public journals are `.testnet/deployment.json` and
+`.testnet/demo-1.json`. For the simultaneous close-versus-liquidation
+race and negative cases, see the [reviewed Sandbox run](https://github.com/unspecifiedcoder/xythum-near-perps/actions/runs/43173872146)
+and its [receipt artifact](https://github.com/unspecifiedcoder/xythum-near-perps/actions/runs/43173872146/artifacts/13923741437).
+In that run, liquidation won and close returned `ERR_NO_ACTIVE`.
+The [pre-deployment review](TESTNET-REVIEW.md) records the testnet scope and
+the remaining production-readiness limits.
