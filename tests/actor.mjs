@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { Console } from 'node:console';
 import {
   createCipheriv, createDecipheriv, createHash, createPrivateKey, createPublicKey,
   diffieHellman, generateKeyPairSync, hkdfSync, randomBytes, sign,
@@ -42,6 +43,7 @@ export function txEvidence(tx) {
     receipts: tx.result.receipts_outcome.map(({ id, outcome }) => ({
       id, executor_id: outcome.executor_id, gas_burnt: outcome.gas_burnt,
       status: outcome.status,
+      logs: outcome.logs,
       bls_gas_profile: (outcome.metadata?.gas_profile ?? []).filter(({ cost }) => /bls12381/i.test(cost)),
     })),
   };
@@ -195,6 +197,8 @@ async function act(command, input) {
 }
 
 if (process.argv[2]) {
+  // Keep the actor's stdout as one JSON value and put SDK receipt logs on stderr.
+  globalThis.console = new Console({ stdout: process.stderr, stderr: process.stderr });
   try {
     const result = await act(process.argv[2], JSON.parse(readFileSync(0, 'utf8')));
     process.stdout.write(JSON.stringify(result));
