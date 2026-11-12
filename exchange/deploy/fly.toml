@@ -1,0 +1,59 @@
+# Fly.io config for a NEW, dedicated app hosting the Xythum testnet session
+# coordinator. stage.mjs copies this into the staging directory and replaces
+# the placeholder with --app <name>; every documented command also passes
+# --app explicitly. Never point this at an existing app. See docs/HOSTING.md.
+app = "REPLACE-WITH-NEW-FLY-APP"
+primary_region = "iad"
+# Coordinator shutdown flushes the session store and waits for a running
+# keeper actor; give it time before SIGKILL.
+kill_signal = "SIGTERM"
+kill_timeout = "60s"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[deploy]
+  # One Machine, one volume. Deploy with `--ha=false` (otherwise the first
+  # deploy creates two Machines) and verify one Machine / one volume after it.
+  # A volume attaches to one Machine at a time; rolling replaces it in place.
+  strategy = "rolling"
+
+[env]
+  NODE_ENV = "production"
+  XYTHUM_ALLOW_HOSTED = "1"
+  XYTHUM_SERVER_HOST = "0.0.0.0"
+  XYTHUM_SERVER_PORT = "8080"
+  XYTHUM_SESSION_DIR = "/data/sessions"
+  XYTHUM_PROVING_DIR = "/app/artifacts/proving"
+  MARKET_WASM = "/app/artifacts/market.wasm"
+  XYTHUM_MARKET_WASM_SHA256 = "9004770854c3d3a1aa8c71d7a19d258fac568abb41cda1dd2ad1827b5c80db7c"
+  PROVER_BIN = "/app/bin/xythum-prover"
+  # Exactly one remotely funded session; the launcher refuses > 1. The server
+  # refuses to start hosted without XYTHUM_HOSTED_INVITE (a Fly secret).
+  XYTHUM_SESSION_QUOTA = "1"
+
+[[mounts]]
+  source = "xythum_sessions"
+  destination = "/data"
+  initial_size = "1gb"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # Always on, no autoscaling: the keeper worker must keep running.
+  auto_stop_machines = "off"
+  auto_start_machines = false
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    method = "GET"
+    path = "/api/health"
+    interval = "30s"
+    timeout = "5s"
+    # Boot re-hashes ~200 MB of pinned artifacts, re-derives the verifying
+    # keys and connects to testnet before listening.
+    grace_period = "180s"
+
+[[vm]]
+  size = "shared-cpu-2x"
+  memory = "2gb"

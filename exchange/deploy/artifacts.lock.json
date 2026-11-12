@@ -1,0 +1,63 @@
+{
+  "comment": "SHA-256 pins of the PUBLIC artifacts staged into the Fly image. Read by stage.mjs (before copying) and by runtime/launch.mjs (self-check and every boot). Values were taken by hashing only these public files in the verified testnet worktree. They agree with docs/TESTNET-ADDRESSES.md (clearing Wasm), exchange/src/protocol/prover-pins.js (open/close .pk) and PINNED_VK_FINGERPRINTS in exchange/server/config.mjs (verifying keys re-derived by `xythum-prover keys`).",
+  "version": 1,
+  "artifacts": [
+    {
+      "id": "market-wasm",
+      "source": "target/near/xythum_near_perps.wasm",
+      "stage": "artifacts/market.wasm",
+      "bytes": 194440,
+      "sha256": "9004770854c3d3a1aa8c71d7a19d258fac568abb41cda1dd2ad1827b5c80db7c"
+    },
+    {
+      "id": "open-pk",
+      "source": ".testnet/proving/open.pk",
+      "stage": "artifacts/proving/open.pk",
+      "bytes": 100928400,
+      "sha256": "7493ceba35d7d37768794b4b1796aded44cae4483da8c9b45bd9a636b784010f"
+    },
+    {
+      "id": "close-pk",
+      "source": ".testnet/proving/close.pk",
+      "stage": "artifacts/proving/close.pk",
+      "bytes": 51373488,
+      "sha256": "26df7dc7c8f3af3e4d1dc2c6c8c307f838512069a48837148f97cda8c082a58a"
+    },
+    {
+      "id": "liquidation-pk",
+      "source": ".testnet/proving/liquidation.pk",
+      "stage": "artifacts/proving/liquidation.pk",
+      "bytes": 51404208,
+      "sha256": "cfde71238d0d8fde45b33ede1a1f39849cab60a581f3b1fb065b9f289a5643a8"
+    },
+    {
+      "id": "browser-prover-glue",
+      "source": "exchange/public/prover/xythum_prover.js",
+      "stage": "exchange/public/prover/xythum_prover.js",
+      "dist": "exchange/dist/prover/xythum_prover.js",
+      "bytes": 15103,
+      "sha256": "78f8275c13bdd7c1ca5fca89b09c6ff23d364af9561995dca60130982a046dcb"
+    },
+    {
+      "id": "browser-prover-wasm",
+      "source": "exchange/public/prover/xythum_prover_bg.wasm",
+      "stage": "exchange/public/prover/xythum_prover_bg.wasm",
+      "dist": "exchange/dist/prover/xythum_prover_bg.wasm",
+      "bytes": 915730,
+      "sha256": "0ae8cbc694fc628dd3086acab595e9d5a143cd8416955521eaa455bab9f335bd"
+    },
+    {
+      "id": "browser-prover-snippet",
+      "source": "exchange/public/prover/snippets/xythum-prover-ae333c5acb535e91/inline0.js",
+      "stage": "exchange/public/prover/snippets/xythum-prover-ae333c5acb535e91/inline0.js",
+      "dist": "exchange/dist/prover/snippets/xythum-prover-ae333c5acb535e91/inline0.js",
+      "bytes": 133,
+      "sha256": "4b8423fa124e5c3e59e74b388d64029e3793b6255800e09319e09406e89953b1"
+    }
+  ],
+  "vk_fingerprints": {
+    "open": "3sesQDTxpTB6+wdunP8crHc4Hnxv9V4TQqFQiBKIsDA=",
+    "liquidation": "hvfOfFq80ldBwlvMRH7dEgQfqvUeULcKpYIjnabxyOg=",
+    "close": "66lAStu/S3ID1d4pkYQEJHubw9EGWDNIO+giKUDfcIs="
+  }
+}
