@@ -1,4 +1,4 @@
-# Xythum testnet exchange
+# Quiet Margin testnet exchange
 
 `exchange/` is the consumer app. It has three parts: a browser client with an
 in-browser Groth16 prover, a Vite UI, and a Node session coordinator

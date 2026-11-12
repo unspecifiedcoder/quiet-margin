@@ -1,4 +1,4 @@
-# Submission checklist
+# Quiet Margin submission checklist
 
 This is a working checklist for the team. Nothing here has been posted or
 submitted. The requirements below come from the team's brief. Confirm each one

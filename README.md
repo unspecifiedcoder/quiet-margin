@@ -1,7 +1,9 @@
-# Xythum NEAR Perps
+# Quiet Margin — Private Perps on NEAR
 
-Native NEAR testnet exchange for confidential BTC/mock-USDC long positions.
-The protocol supports funded voluntary close and keeper liquidation.
+Quiet Margin is a native NEAR testnet exchange for confidential
+BTC/mock-USDC long positions. The protocol supports funded voluntary close
+and keeper liquidation: a keeper can liquidate an eligible committed position
+while the trader is offline.
 
 ## Testnet exchange
 

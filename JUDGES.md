@@ -1,6 +1,6 @@
-# Judge guide
+# Quiet Margin judge guide
 
-Xythum NEAR Perps is a native NEAR clearing contract for a confidential
+Quiet Margin is a native NEAR clearing contract for a confidential
 BTC/mock-USDC long position. Size, entry, and margin are hidden behind a
 salted commitment. Groth16 proofs, checked on chain through the NEP-488
 BLS12-381 host functions, gate opening, voluntary close, and keeper
