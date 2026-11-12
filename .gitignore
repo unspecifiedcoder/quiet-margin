@@ -6,3 +6,10 @@
 *.witness.json
 *.keeper-keys.json
 /.testnet/
+/exchange/node_modules/
+/exchange/dist/
+# wasm-bindgen output of prover/browser/build.{sh,ps1}
+/exchange/public/prover/xythum_prover.js
+/exchange/public/prover/xythum_prover_bg.wasm
+/exchange/public/prover/*.d.ts
+/exchange/public/prover/snippets/

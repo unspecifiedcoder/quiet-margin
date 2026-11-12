@@ -1,11 +1,26 @@
 # Xythum NEAR Perps
 
-Native NEAR demo for confidential BTC/mock-USDC positions, funded voluntary close, and keeper liquidation.
+Native NEAR testnet exchange for confidential BTC/mock-USDC long positions.
+The protocol supports funded voluntary close and keeper liquidation.
 
-## Judges start here
+## Testnet exchange
 
-[JUDGES.md](JUDGES.md) is the short guide. With Node 22 on Windows or
-Linux and no install step:
+The consumer app lives in `exchange/`. Each visitor's browser creates its own
+key and gets its own trader account and market on NEAR testnet. The visitor
+then deposits mock mUSDC, proves a position locally, opens it, and closes or
+withdraws. Every step links to its receipt on testnet.
+**[docs/EXCHANGE.md](docs/EXCHANGE.md)** covers the user walkthrough,
+privacy disclosures, and operator setup.
+
+Status: the app is still being integrated. No end-to-end browser run on testnet
+has been recorded yet, and there is no public hosted instance. The app
+uses testnet only, with mock collateral and no real assets.
+
+## Evidence: judges start here
+
+[JUDGES.md](JUDGES.md) is the short guide. The replay below is recorded
+evidence from the earlier operator-driven testnet run. It is not the app.
+It needs Node 22 on Windows or Linux and no install step:
 
 ```text
 node scripts/serve-demo.mjs               # static testnet replay at http://127.0.0.1:8787/
@@ -37,6 +52,7 @@ It includes public proof and receipt data, Wasm and verifying-key hashes,
 timings, and ledger snapshots. Sandbox-only proving keys and keeper keys
 live in a temporary directory for the run. The fixture is synthetic.
 
+- [Testnet exchange: user and operator guide](docs/EXCHANGE.md)
 - [Funded market specification](docs/FUNDED-MARKET.md)
 - [Testnet addresses and local credential locations](docs/TESTNET-ADDRESSES.md)
 - [Original Sandbox specification](docs/SPEC.md)
