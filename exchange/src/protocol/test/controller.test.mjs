@@ -172,6 +172,204 @@ test('a keeper liquidation is shown and erases the local opening', async () => {
   assert.equal(await controller.onClose(), false);
 });
 
+// ---------------------------------------------------------------- Keeper B
+
+const sessionGets = (w) => w.serverBodies.filter((b) => b.route === 'GET /session').length;
+const receiptFor = (s, hash) => s.receipts.find((r) => r.hash === hash);
+
+/** Opens 0.01 BTC with 500 USD margin at 100,000 and arms Keeper B while healthy. */
+async function armedPosition(world, existing) {
+  const c = existing ?? await started(world);
+  const { controller, last } = c;
+  assert.equal(await controller.onSetMark(100_000), true, last().error);
+  assert.equal(await controller.onDeposit(600), true, last().error);
+  assert.equal(await controller.onOpen({ sizeBtc: 0.01, marginUsd: 500 }), true, last().error);
+  assert.equal(await controller.onArmKeeper(), true, last().error);
+  assert.equal(last().keeperArmed, true);
+  return c;
+}
+
+/** Moves the mark to 52,000 and lets Keeper B liquidate in the background. */
+async function backgroundLiquidation(world, controller) {
+  assert.equal(await controller.onSetMark(52_000), true, controller.snapshot().error);
+  const outcome = await world.keeperLiquidate();
+  assert.ok(outcome.status.SuccessValue !== undefined, JSON.stringify(outcome.status));
+  return outcome.transaction.hash;
+}
+
+test('a background Keeper B liquidation appears verified in the same open tab', async () => {
+  const world = await createWorld();
+  const { w } = world;
+  const { controller, last, store } = await armedPosition(world);
+  const hash = await backgroundLiquidation(world, controller);
+  assert.equal(last().keeperArmed, true, 'nothing observed yet');
+
+  const gets = sessionGets(w);
+  await controller.poll();
+  assert.equal(sessionGets(w), gets + 1, 'one coordinator read while armed');
+  const s = last();
+  assert.equal(s.keeperArmed, false);
+  assert.equal(s.active, null);
+  assert.equal(s.position, null);
+  assert.equal(s.balances.available, 11_900);
+  assert.deepEqual(receiptFor(s, hash), {
+    label: 'liquidation_1', hash, explorerUrl: 'https://testnet.nearblocks.io/txns/' + hash,
+  });
+  assert.match(s.notice, new RegExp('Keeper B liquidated position nonce 1 on chain in ' + hash));
+  assert.equal(await store.get('keeper'), undefined);
+  assert.equal(await store.get('opening'), undefined);
+
+  // Settled: polling goes back to chain reads only, and the receipt is not duplicated.
+  await controller.poll();
+  assert.equal(sessionGets(w), gets + 1);
+  assert.equal(last().receipts.filter((r) => r.hash === hash).length, 1);
+});
+
+test('a coordinator outage never blocks chain refresh and the result lands when it returns', async () => {
+  const world = await createWorld();
+  const { w } = world;
+  const { controller, last } = await armedPosition(world);
+  const hash = await backgroundLiquidation(world, controller);
+  w.hooks.api = async (route) => (route === 'GET /session'
+    ? new Response(JSON.stringify({ error: 'coordinator restarting' }), { status: 503 }) : null);
+  await controller.poll();
+  let s = last();
+  assert.equal(s.error, null, 'the outage is not a trading error');
+  assert.equal(s.active, null, 'the finalized chain view still moved');
+  assert.equal(s.balances.available, 11_900);
+  assert.equal(s.keeperArmed, false, 'never shown armed over a settled slot');
+  assert.equal(receiptFor(s, hash), undefined);
+
+  w.hooks.api = null;
+  await controller.poll();
+  s = last();
+  assert.equal(receiptFor(s, hash)?.label, 'liquidation_1');
+  assert.match(s.notice, /Keeper B liquidated position nonce 1/);
+});
+
+test('resume after being offline picks up and verifies the Keeper B liquidation', async () => {
+  const world = await createWorld();
+  const first = await armedPosition(world);
+  const hash = await backgroundLiquidation(world, first.controller);
+  // The tab was closed before it could observe anything.
+  assert.equal(first.last().keeperArmed, true);
+
+  const reload = makeController(world, first.store);
+  assert.equal(await reload.controller.onResume(), true, reload.last()?.error);
+  const s = reload.last();
+  assert.equal(s.keeperArmed, false);
+  assert.equal(s.active, null);
+  assert.equal(receiptFor(s, hash)?.label, 'liquidation_1', 'verified, not server-reported');
+  assert.match(s.notice, /Keeper B liquidated position nonce 1/);
+  assert.equal(await reload.store.get('keeper'), undefined);
+
+  // A second reload neither re-verifies nor downgrades receipts it already holds.
+  const again = makeController(world, first.store);
+  assert.equal(await again.controller.onResume(), true, again.last()?.error);
+  assert.equal(receiptFor(again.last(), hash)?.label, 'liquidation_1');
+  assert.ok(again.last().receipts.some((r) => r.label === 'maker approval'));
+  assert.ok(!again.last().receipts.some((r) => /^maker approval \(/.test(r.label)));
+});
+
+test('arming a distressed position reports its immediate verified liquidation', async () => {
+  const world = await createWorld();
+  const { w } = world;
+  const { controller, last, store } = await started(world);
+  await controller.onSetMark(100_000);
+  await controller.onDeposit(600);
+  assert.equal(await controller.onOpen({ sizeBtc: 0.01, marginUsd: 500 }), true, last().error);
+  await controller.onSetMark(52_000);
+  assert.equal(last().position.liquidatable, true);
+
+  assert.equal(await controller.onArmKeeper(), true, last().error);
+  const s = last();
+  const hash = [...w.txs.values()].find((o) => o.transaction.signer_id === IDS.keeperB).transaction.hash;
+  assert.equal(s.error, null);
+  assert.equal(s.keeperArmed, false);
+  assert.equal(s.active, null);
+  assert.equal(receiptFor(s, hash)?.label, 'liquidation_1');
+  assert.match(s.notice, /Keeper B liquidated position nonce 1/);
+  assert.equal(await store.get('keeper'), undefined);
+});
+
+test('an unverifiable immediate liquidation is refused, not shown as armed', async () => {
+  const world = await createWorld();
+  const { w } = world;
+  const { controller, last } = await started(world);
+  await controller.onSetMark(100_000);
+  await controller.onDeposit(600);
+  await controller.onOpen({ sizeBtc: 0.01, marginUsd: 500 });
+  const makerHash = last().receipts.find((r) => r.label === 'maker approval').hash;
+  w.hooks.api = async (route) => (route === 'POST /session/keeper'
+    ? new Response(JSON.stringify({ keeper_armed: false, receipt: { label: 'liquidation_1', hash: makerHash } }), { status: 200 })
+    : null);
+  assert.equal(await controller.onArmKeeper(), false);
+  assert.match(last().error, /does not verify on chain/);
+  assert.equal(last().keeperArmed, false);
+  assert.ok(last().active, 'nothing was settled');
+});
+
+test('the next position can be armed after a Keeper B settlement', async () => {
+  const world = await createWorld();
+  const { w } = world;
+  const c = await armedPosition(world);
+  await backgroundLiquidation(world, c.controller);
+  await c.controller.poll();
+  assert.equal(c.last().keeperArmed, false);
+
+  w.balances.set(IDS.trader, w.balances.get(IDS.trader) + 60_000); // faucet top-up
+  await armedPosition(world, c);
+  const s = c.last();
+  assert.equal(s.active.nonce, 2);
+  assert.equal(s.keeperArmed, true);
+  assert.deepEqual(await c.store.get('keeper'), {
+    market_id: IDS.market, nonce: 2, commitment: s.active.commitment,
+  });
+  // The settled slot's receipt cannot settle the new slot.
+  await c.controller.poll();
+  assert.equal(c.last().keeperArmed, true);
+  assert.ok(c.last().active);
+
+  await backgroundLiquidation(world, c.controller);
+  await c.controller.poll();
+  assert.equal(c.last().keeperArmed, false);
+  assert.match(c.last().notice, /nonce 2/);
+  assert.equal(c.last().receipts.filter((r) => /^liquidation_\d$/.test(r.label)).length, 2);
+  assert.equal(methodsCalled(w, IDS.keeperB).length, 2);
+});
+
+test('a coordinator view for another session or a forged liquidation receipt changes nothing', async () => {
+  const world = await createWorld();
+  const { w } = world;
+  const { controller, last } = await armedPosition(world);
+  const makerHash = last().receipts.find((r) => r.label === 'maker approval').hash;
+
+  w.hooks.session = () => ({ trader_id: 'someone-else.testnet' });
+  await controller.poll();
+  assert.match(last().error, /coordinator view changed trader_id/);
+  assert.equal(last().keeperArmed, true);
+
+  w.hooks.session = () => ({ keeper_armed: false, receipts: [{ label: 'liquidation_1', hash: makerHash }] });
+  await controller.poll();
+  const s = last();
+  assert.ok(s.active, 'still open on chain');
+  assert.ok(!/Keeper B liquidated/.test(s.notice ?? ''));
+  assert.equal(receiptFor(s, makerHash).label, 'maker approval', 'a forged label never overwrites a held receipt');
+  assert.equal(controller.keeperRejected.has(makerHash), true);
+
+  // A forged receipt under a hash this browser has never seen is shown as such.
+  const unknown = toBase58(new Uint8Array(32).fill(5));
+  w.hooks.rpc = async (method, params) => (method === 'tx' && params.tx_hash === unknown
+    ? { result: { ...w.txs.get(makerHash), transaction: { ...w.txs.get(makerHash).transaction, hash: unknown } } }
+    : undefined);
+  w.hooks.session = () => ({ receipts: [{ label: 'liquidation_1', hash: unknown }] });
+  assert.equal(await controller.onArmKeeper(), true, last().error);
+  await controller.poll();
+  assert.equal(last().keeperArmed, true);
+  assert.ok(last().active);
+  assert.equal(receiptFor(last(), unknown)?.label, 'liquidation_1 (failed on-chain verification)');
+});
+
 test('route and config mismatches are refused before any signing', async () => {
   for (const [patch, pattern] of [
     [{ rpc_url: 'https://rpc.testnet.near.org' }, /pinned testnet RPC/],

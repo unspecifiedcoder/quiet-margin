@@ -8,11 +8,11 @@
 // step that already landed and never reporting a step that did not.
 
 import { ApiError } from './api.js';
-import { equalBytes, fromBase64, randomBytes, sha256, toBase64, toHex, utf8 } from './bytes.js';
+import { equalBytes, fromBase64, fromUtf8, randomBytes, sha256, toBase64, toHex, utf8 } from './bytes.js';
 import { Chain, TxFailedError } from './chain.js';
 import { encryptWitness } from './envelope.js';
 import * as M from './model.js';
-import { interpretOutcome, pinRpcUrl, Rpc } from './rpc.js';
+import { interpretOutcome, pinRpcUrl, Rpc, RpcError } from './rpc.js';
 import { loadSigner, sessionProof, storedSigner, verifyEd25519 } from './signer.js';
 import { CALL_GAS, functionCall, ONE_YOCTO } from './tx.js';
 
@@ -20,6 +20,12 @@ const SESSION = 'session';
 const OPENING = 'opening';
 const MARKS = 'marks';
 const RECEIPTS = 'receipts';
+/** Public `{market_id, nonce, commitment}` of the slot this browser asked Keeper B to guard. */
+const KEEPER = 'keeper';
+/** Coordinator receipt label for a Keeper B liquidation of position `<nonce>`. */
+const LIQUIDATION_LABEL = /^liquidation_([1-9]\d{0,9})$/;
+/** Liquidation receipts verified on chain per coordinator view, at most. */
+const MAX_KEEPER_CHECKS = 4;
 const MAX_MARKS = 200;
 const MAX_RECEIPTS = 100;
 /** Refresh the oracle before staging when it is older than this. */
@@ -97,6 +103,11 @@ export class ExchangeController {
     this.ctx = null;
     this.timer = null;
     this.refreshing = null;
+    this.keeperSyncing = null;
+    /** Liquidation receipt hashes that definitively failed on-chain verification. */
+    this.keeperRejected = new Set();
+    /** Liquidation receipt hashes whose verification hit a transient RPC error. */
+    this.keeperPending = new Set();
   }
 
   // ------------------------------------------------------------------
@@ -117,7 +128,8 @@ export class ExchangeController {
     const tag = status === 'pending' ? ' (pending finality)'
       : status === 'failed' ? ' (failed' + (reason ? ': ' + reason : '') + ')'
         : status === 'rejected' ? ' (not executed)'
-          : status === 'unverified' ? ' (server-reported)' : '';
+          : status === 'unverified' ? ' (server-reported)'
+            : status === 'invalid' ? ' (failed on-chain verification)' : '';
     const entry = { label: label + tag, hash, explorerUrl: explorerUrl(this.state.network, hash) };
     const list = this.state.receipts.filter((r) => r.hash !== hash);
     list.push(entry);
@@ -144,6 +156,8 @@ export class ExchangeController {
     this.emit({ busy: name, error: null, notice: null });
     let ok = false;
     const body = async () => {
+      // A background keeper sync must not interleave with the keeper record writes below.
+      await this.keeperSyncing;
       // Settle any transaction an earlier attempt left in flight first.
       if (this.ctx) await this.ctx.chain.resolveJournal();
       await fn();
@@ -264,14 +278,29 @@ export class ExchangeController {
         traderId: session.trader_id, marketId: session.market_id, tokenId: session.token_id,
         publicKey: signer.publicKey, custody: signer.custody, configFingerprint: fingerprint,
       },
-      keeperArmed: session.keeper_armed,
+      // Derived below from the coordinator view and the finalized active slot.
+      keeperArmed: false,
       markHistory: (await this.store.get(MARKS)) ?? [],
       receipts: (await this.store.get(RECEIPTS)) ?? [],
     };
-    for (const r of session.receipts) await this.addReceipt({ ...r, status: 'unverified' });
+    // Liquidation receipts are verified on chain by applyKeeperView; a
+    // receipt this browser already holds is never downgraded.
+    for (const r of session.receipts) {
+      if (LIQUIDATION_LABEL.test(r.label) || this.state.receipts.some((x) => x.hash === r.hash)) continue;
+      await this.addReceipt({ ...r, status: 'unverified' });
+    }
     this.startPolling();
     // A transaction journaled before a reload is followed to FINAL now.
     await chain.resolveJournal();
+    // Resume: a Keeper B result that landed while this browser was away is
+    // picked up from the view already fetched. Failure here never blocks the
+    // restore; the poll retries while a keeper slot is watched.
+    try {
+      await this.refresh();
+      await this.applyKeeperView(session);
+    } catch (error) {
+      this.state = { ...this.state, notice: 'Keeper status could not be confirmed yet: ' + describe(error) };
+    }
   }
 
   /** Route and fingerprint checks performed before any signing. */
@@ -313,9 +342,23 @@ export class ExchangeController {
 
   startPolling() {
     if (this.timer || !this.pollMs) return;
-    this.timer = setInterval(() => {
-      if (!this.state.busy) this.refresh().then(() => this.emit(), () => {});
-    }, this.pollMs);
+    this.timer = setInterval(() => this.poll(), this.pollMs);
+  }
+
+  /**
+   * One background tick: the finalized chain read, then (only while a keeper
+   * slot or a liquidation receipt is outstanding) the coordinator view. The
+   * chain refresh is applied and emitted even when the coordinator is down.
+   */
+  async poll() {
+    if (this.state.busy || !this.ctx) return;
+    try {
+      await this.refresh();
+    } catch {
+      return;
+    }
+    this.emit();
+    if (await this.watchKeeper()) this.emit();
   }
 
   stop() {
@@ -365,6 +408,8 @@ export class ExchangeController {
       await this.store.delete(OPENING);
       notice = `Position nonce ${record.nonce} was settled on chain; its local secret opening was erased`;
     }
+    // Keeper B guards one slot; the flag never outlives it on chain.
+    const keeperArmed = this.state.keeperArmed && this.slotLive(await this.keeperRecord(), active);
     this.state = {
       ...this.state,
       oracle: oracle ? { price_ticks: oracle.price_ticks, round: oracle.round, funding_cents: oracle.funding_cents } : null,
@@ -376,6 +421,7 @@ export class ExchangeController {
       },
       active: active ? { nonce: active.nonce, commitment: active.commitment } : null,
       position,
+      keeperArmed,
       markHistory,
       notice,
       halted: ledger.halted,
@@ -463,13 +509,179 @@ export class ExchangeController {
 
   onArmKeeper() {
     return this.run('Arming Keeper B', async () => {
-      const { keeper_armed: armed, receipt } = await this.api.armKeeper();
-      if (receipt) {
-        await this.verifyServerReceipt(receipt, this.ctx.config.keepers[1].account_id, null)
-          .catch(() => this.addReceipt({ ...receipt, status: 'unverified' }));
+      const { active } = await this.refresh();
+      if (!active) throw new Error('there is no active position for Keeper B to guard');
+      // Recorded before the request, so a lost response is still resolved
+      // by the coordinator view instead of being forgotten.
+      const slot = { market_id: this.ctx.session.market_id, nonce: active.nonce, commitment: active.commitment };
+      await this.store.put(KEEPER, slot);
+      let response;
+      try {
+        response = await this.api.armKeeper();
+      } catch (error) {
+        // A definitive refusal arms nothing; an unreachable server may have.
+        if (error instanceof ApiError && error.status) await this.store.delete(KEEPER);
+        throw error;
       }
-      if (!armed) throw new Error('the server did not arm Keeper B');
-      this.state = { ...this.state, keeperArmed: true };
+      const { keeper_armed: armed, receipt } = response;
+      if (receipt) {
+        // Arming can settle a position that is already distressed at once.
+        let verified = true;
+        try {
+          await this.verifyLiquidationReceipt(receipt, slot.nonce);
+        } catch (error) {
+          if (!armed) throw new Error('Keeper B reported a liquidation that does not verify on chain: ' + describe(error));
+          verified = false;
+          if (error instanceof RpcError) this.keeperPending.add(receipt.hash);
+          await this.addReceipt({ ...receipt, status: 'unverified' });
+        }
+        await this.refresh();
+        if (verified) {
+          await this.settleKeeper(slot, receipt);
+          return;
+        }
+      }
+      if (!armed) {
+        await this.store.delete(KEEPER);
+        throw new Error('the server did not arm Keeper B');
+      }
+      this.state = { ...this.state, keeperArmed: this.slotLive(slot, this.chainState?.active) };
+    });
+  }
+
+  // ------------------------------------------------------------------
+  // Keeper B status (coordinator view, verified on chain).
+  // ------------------------------------------------------------------
+
+  async keeperRecord() {
+    const slot = await this.store.get(KEEPER);
+    return slot && slot.market_id === this.ctx?.session.market_id ? slot : null;
+  }
+
+  slotLive(slot, active) {
+    return Boolean(slot && active && active.nonce === slot.nonce && active.commitment === slot.commitment);
+  }
+
+  /** Clears the guarded slot after its verified liquidation. */
+  async settleKeeper(slot, receipt) {
+    await this.store.delete(KEEPER);
+    this.state = {
+      ...this.state,
+      keeperArmed: false,
+      notice: `Keeper B liquidated position nonce ${slot.nonce} on chain in ${receipt.hash}`,
+    };
+  }
+
+  /**
+   * Same-session coordinator read, only while a guarded slot or an
+   * unconfirmed liquidation receipt is outstanding. Never throws: a
+   * coordinator outage leaves the chain-derived state as it is. Returns
+   * whether the coordinator was consulted.
+   */
+  watchKeeper() {
+    this.keeperSyncing ??= (async () => {
+      if (!this.ctx) return false;
+      if (!(await this.keeperRecord()) && this.keeperPending.size === 0) return false;
+      let view;
+      try {
+        view = await this.api.getSession(this.ctx.session.session_id);
+      } catch {
+        return false;
+      }
+      await this.applyKeeperView(view);
+      return true;
+    })().catch((error) => {
+      this.state = { ...this.state, error: this.state.error ?? 'Keeper status: ' + describe(error) };
+      return true;
+    }).finally(() => {
+      this.keeperSyncing = null;
+    });
+    return this.keeperSyncing;
+  }
+
+  /** Applies a coordinator session view to the keeper state of this session. */
+  async applyKeeperView(view) {
+    const { session } = this.ctx;
+    for (const field of ['session_id', 'trader_id', 'market_id', 'token_id', 'chain_id', 'rpc_url']) {
+      if (view[field] !== session[field]) throw new Error('the coordinator view changed ' + field + '; ignored');
+    }
+    if (canonical(view.keeper_encryption_keys) !== canonical(session.keeper_encryption_keys)) {
+      throw new Error('the coordinator view changed the keeper keys; ignored');
+    }
+
+    const slot = await this.keeperRecord();
+    let settled = null;
+    let fresh = false;
+    let checks = 0;
+    const seen = new Set();
+    for (const receipt of view.receipts) {
+      const nonce = Number(LIQUIDATION_LABEL.exec(receipt.label)?.[1] ?? NaN);
+      if (!Number.isSafeInteger(nonce) || seen.has(receipt.hash) || this.keeperRejected.has(receipt.hash)) continue;
+      seen.add(receipt.hash);
+      let ok = this.state.receipts.some((r) => r.hash === receipt.hash && r.label === receipt.label);
+      if (!ok && checks < MAX_KEEPER_CHECKS) {
+        checks += 1;
+        try {
+          await this.verifyLiquidationReceipt(receipt, nonce);
+          this.keeperPending.delete(receipt.hash);
+          ok = true;
+          fresh = true;
+        } catch (error) {
+          if (error instanceof RpcError) {
+            // Not final or RPC unavailable yet: shown as reported, retried.
+            this.keeperPending.add(receipt.hash);
+            if (!this.state.receipts.some((r) => r.hash === receipt.hash)) {
+              await this.addReceipt({ ...receipt, status: 'unverified' });
+            }
+          } else {
+            this.keeperPending.delete(receipt.hash);
+            this.keeperRejected.add(receipt.hash);
+            // Never relabels a receipt this browser already holds under that hash.
+            if (!this.state.receipts.some((r) => r.hash === receipt.hash)) {
+              await this.addReceipt({ ...receipt, status: 'invalid' });
+            }
+          }
+        }
+      }
+      if (ok && slot && nonce === slot.nonce) settled = receipt;
+    }
+    // A verified liquidation moves the finalized position view with it.
+    const chain = fresh ? await this.refresh() : (this.chainState ?? await this.refresh());
+
+    if (!slot) {
+      this.state = { ...this.state, keeperArmed: false };
+      return;
+    }
+    if (settled) {
+      await this.settleKeeper(slot, settled);
+      return;
+    }
+    const live = this.slotLive(slot, chain.active);
+    const reported = view.receipts.some((r) => r.label === 'liquidation_' + slot.nonce && !this.keeperRejected.has(r.hash));
+    if (!view.keeper_armed && (live || !reported)) {
+      // Disarmed with the slot still open, or settled with no liquidation
+      // receipt for it: nothing more will arrive for this slot.
+      await this.store.delete(KEEPER);
+    }
+    this.state = { ...this.state, keeperArmed: Boolean(view.keeper_armed) && live };
+  }
+
+  /**
+   * A Keeper B liquidation receipt: FINAL and successful, signed by Keeper B,
+   * a single `liquidate` call on this market for position `nonce`.
+   */
+  verifyLiquidationReceipt(receipt, nonce) {
+    if (receipt.label !== 'liquidation_' + nonce) throw new Error(receipt.label + ': not the liquidation of nonce ' + nonce);
+    return this.verifyServerReceipt(receipt, this.ctx.config.keepers[1].account_id, 'liquidate', (tx) => {
+      let args;
+      try {
+        args = JSON.parse(fromUtf8(fromBase64(tx.actions[0].FunctionCall.args)));
+      } catch {
+        args = null;
+      }
+      if (tx.actions.length !== 1 || args?.nonce !== nonce) {
+        throw new Error(receipt.label + ': receipt does not liquidate nonce ' + nonce);
+      }
     });
   }
 
@@ -477,17 +689,19 @@ export class ExchangeController {
    * Confirms a server-signed transaction on chain: FINAL, successful,
    * signed by the expected role and sent to this market.
    */
-  async verifyServerReceipt(receipt, signerId, method) {
+  async verifyServerReceipt(receipt, signerId, method, check) {
     const outcome = await this.ctx.rpc.txFinal(receipt.hash, signerId);
     const tx = outcome.transaction;
     const { ok } = interpretOutcome(outcome);
     if (tx?.signer_id !== signerId) throw new Error(receipt.label + ': unexpected signer ' + tx?.signer_id);
+    if (tx.hash !== undefined && tx.hash !== receipt.hash) throw new Error(receipt.label + ': RPC returned another transaction');
     if (method) {
       const call = tx.actions?.[0]?.FunctionCall;
       if (tx.receiver_id !== this.ctx.session.market_id || call?.method_name !== method) {
         throw new Error(receipt.label + ': receipt is not ' + method + ' on this market');
       }
     }
+    check?.(tx);
     if (!ok) throw new Error(receipt.label + ' failed on chain in ' + receipt.hash);
     await this.addReceipt({ label: receipt.label, hash: receipt.hash, status: 'final' });
     return outcome;
@@ -746,6 +960,8 @@ export class ExchangeController {
       chain = await this.refresh();
       if (chain.active) throw new Error(`close ${result.hash} finalized but the position is still active`);
       await this.store.delete(OPENING);
+      // The trader settled this slot; Keeper B will report no liquidation for it.
+      if ((await this.keeperRecord())?.nonce === active.nonce) await this.store.delete(KEEPER);
       this.state = {
         ...this.state,
         notice: `Closed nonce ${active.nonce}: refund ${usd(out.refund)} mUSDC`

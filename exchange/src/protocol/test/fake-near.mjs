@@ -203,7 +203,10 @@ export async function createWorld() {
     }
     const outcome = {
       final_execution_status: 'FINAL', status,
-      transaction: { signer_id: signer, receiver_id: receiver, hash, actions: [{ FunctionCall: { method_name: method } }] },
+      transaction: {
+        signer_id: signer, receiver_id: receiver, hash,
+        actions: [{ FunctionCall: { method_name: method, args: toBase64(utf8(JSON.stringify(args))) } }],
+      },
       transaction_outcome: { id: hash }, receipts_outcome: [],
     };
     w.txs.set(hash, outcome);
@@ -293,7 +296,11 @@ export async function createWorld() {
       if (!w.balances.has(IDS.trader)) w.balances.set(IDS.trader, 100_000);
       return sessionBody();
     },
-    async 'GET /session'() { return sessionBody(); },
+    async 'GET /session'() {
+      // The coordinator disarms once it observes its slot settled.
+      if (session.armed && w.active?.nonce !== session.slot?.nonce) session.armed = false;
+      return sessionBody();
+    },
     async 'POST /session/mark'({ price_ticks }) {
       oracleRound += 1;
       const hash = await serverTx(IDS.oracle, 'publish_oracle', {
@@ -320,9 +327,15 @@ export async function createWorld() {
       }
       return { acknowledgments, receipt: { label: 'maker approval', hash } };
     },
+    // Mirrors the coordinator: arming pins the active slot and immediately
+    // attempts it, so a distressed position is liquidated in the response.
     async 'POST /session/keeper'() {
+      if (!w.active) throw Object.assign(new Error('no active position'), { status: 409 });
       session.armed = true;
-      return { keeper_armed: true };
+      session.slot = { nonce: w.active.nonce, commitment: w.active.commitment };
+      if (!keeperCanLiquidate()) return { keeper_armed: true };
+      await keeperLiquidate();
+      return { keeper_armed: session.armed, receipt: session.receipts.at(-1) };
     },
   };
 
@@ -345,17 +358,32 @@ export async function createWorld() {
     }
   };
 
-  /** Keeper B liquidation using its decrypted witness (out of band). */
+  function keeperCanLiquidate() {
+    const o = w.oracle;
+    return Boolean(w.active && o && M.isLiquidatable(w.keeperWitness, o.price_ticks, o.funding_cents - w.active.funding_checkpoint));
+  }
+
+  /**
+   * Keeper B liquidation using its decrypted witness (out of band). When the
+   * session armed this slot, the coordinator records `liquidation_<nonce>`
+   * in the session view and disarms, as the real coordinator does.
+   */
   async function keeperLiquidate() {
     const witness = w.keeperWitness;
     const o = w.oracle;
+    const { nonce, commitment } = w.active;
     const delta = o.funding_cents - w.active.funding_checkpoint;
     const s = M.settlement('liquidation', witness, o.price_ticks, delta);
-    const proof = await fakeProof('liquidation', w.active.commitment, await context(w.active), o.round, o.price_ticks, delta, s.refund, s.bad_debt);
+    const proof = await fakeProof('liquidation', commitment, await context(w.active), o.round, o.price_ticks, delta, s.refund, s.bad_debt);
     const hash = toBase58(await sha256(utf8('keeper-' + o.round)));
-    return execute(hash, IDS.keeperB, IDS.market, 'liquidate', {
-      nonce: w.active.nonce, root: w.active.commitment, round: o.round, ...s, proof,
+    const outcome = await execute(hash, IDS.keeperB, IDS.market, 'liquidate', {
+      nonce, root: commitment, round: o.round, ...s, proof,
     }, 0n);
+    if (session.armed && session.slot?.nonce === nonce && outcome.status.SuccessValue !== undefined) {
+      session.receipts.push({ label: 'liquidation_' + nonce, hash });
+      session.armed = false;
+    }
+    return outcome;
   }
 
   const prover = {
