@@ -46,7 +46,7 @@ function replaceByte(base64) {
   return bytes.toString('base64');
 }
 
-test('funded private liquidation by a cold backup keeper', { timeout: 480_000 }, async () => {
+test('funded private liquidation by a cold backup keeper', { timeout: 600_000 }, async () => {
   assert.ok(process.env.NEAR_SANDBOX_BINARY_PATH, 'run scripts/sandbox.sh to pin the Sandbox binary');
   const sandboxVersion = execFileSync(join(process.env.NEAR_SANDBOX_BINARY_PATH, 'near-sandbox'),
     ['--version'], { encoding: 'utf8' }).trim();
@@ -293,6 +293,86 @@ test('funded private liquidation by a cold backup keeper', { timeout: 480_000 },
     evidence.open = openArgs;
     evidence.market = { id: market, account: contract.accountId, deployment_id: deploymentId };
     evidence.public_ciphertexts = ciphertexts;
+
+    // A fresh market instance exercises exact maintenance equality and the
+    // gap waterfall independently of the funded failover fixture above.
+    const gapTrader = await root.createSubAccount('gap-trader');
+    const gapMarket = await root.createSubAccount('gap-market');
+    const gapDeployment = randomBytes(32).toString('base64');
+    const gapDeploy = await gapMarket.deploy(marketWasm);
+    assert.ok(gapDeploy.succeeded, JSON.stringify(gapDeploy.status));
+    await success(gapMarket, gapMarket, 'init', {
+      ...contractInit, trader_id: gapTrader.accountId, deployment_id: gapDeployment,
+    });
+    for (const account of [gapMarket, gapTrader]) await register(account);
+    for (const [account, amount, msg] of [[gapTrader, '60000', 'trader'], [maker, '100000', 'maker']]) {
+      await success(root, token, 'ft_transfer', { receiver_id: account.accountId, amount }, ONE_YOCTO);
+      await success(account, token, 'ft_transfer_call', {
+        receiver_id: gapMarket.accountId, amount, msg,
+      }, ONE_YOCTO);
+    }
+    const publishGap = async (round, price_ticks) => {
+      await success(oracle, gapMarket, 'publish_oracle', { round, price_ticks, funding_cents: 0 });
+      return gapMarket.view('get_oracle');
+    };
+    const gapEntry = await publishGap(1, 57);
+    const gapId = await gapMarket.view('get_market');
+    const gapOpening = actor('prepare', {
+      ...provingArgs, market: gapId, trader: gapTrader.accountId,
+      fixture: { size_lots: 1, entry_ticks: 57, margin_cents: 19 },
+    });
+    const gapCommit = { nonce: 1, commitment: gapOpening.commitment };
+    await success(gapTrader, gapMarket, 'stage_position',
+      { ...gapCommit, ciphertexts: gapOpening.ciphertexts });
+    const gapBlock = await worker.provider.block({ finality: 'final' });
+    await success(maker, gapMarket, 'approve_quote',
+      { ...gapCommit, expires_at: gapBlock.header.height + 500 });
+    const gapKeeper = (i) => ({
+      ...keeper(i), contractId: gapMarket.accountId, trader: gapTrader.accountId,
+    });
+    const gapOpenTx = await success(gapTrader, gapMarket, 'open', {
+      ...gapCommit, proof: gapOpening.proof,
+      acknowledgments: [0, 1].map((i) => actor('ack', gapKeeper(i)).signature),
+    });
+    const equalOracle = await publishGap(2, 40);
+    actor('prove', gapKeeper(1), /healthy|maintenance/i);
+    const equalAttempt = actor('prove', {
+      ...gapKeeper(1), oracleOverride: { ...equalOracle, price_ticks: 1 },
+    }).liquidation;
+    const beforeEquality = await gapMarket.view('get_ledger');
+    const equality = await keeperB.callRaw(gapMarket, 'liquidate', equalAttempt, { gas: FULL_GAS });
+    assert.ok(equality.failed);
+    assert.match(JSON.stringify(equality.failures), /proof/i);
+    assert.deepEqual(await gapMarket.view('get_ledger'), beforeEquality);
+    assert.equal((await gapMarket.view('get_active')).commitment, gapOpening.commitment);
+
+    const gapOracle = await publishGap(3, 1);
+    const gapLiquidation = actor('liquidate', gapKeeper(1));
+    const gapLedger = await gapMarket.view('get_ledger');
+    assert.deepEqual(gapLedger, {
+      trader_available: 59_981, trader_locked: 0, maker_vault: 99_919,
+      maker_reserved: 0, keeper_available: [0, 100], pending_withdrawals: 0,
+      bad_debt: 37, halted: true, next_nonce: 2,
+    });
+    assert.equal(await tokenBalance(gapMarket), 160_000);
+    assert.equal(await gapMarket.view('get_active'), null);
+    const halted = await gapTrader.callRaw(gapMarket, 'stage_position', {
+      ...gapCommit, nonce: 2, ciphertexts: gapOpening.ciphertexts,
+    }, { gas: FULL_GAS });
+    assert.ok(halted.failed);
+    assert.match(JSON.stringify(halted.failures), /halted/i);
+    assert.deepEqual(await gapMarket.view('get_ledger'), gapLedger);
+    evidence.risk_edges = {
+      market: { id: gapId, account: gapMarket.accountId, deployment_id: gapDeployment },
+      oracle_rounds: [gapEntry, equalOracle, gapOracle],
+      open: gapOpenTx,
+      equality: txEvidence(equality),
+      gap: gapLiquidation,
+      ledger: gapLedger,
+      halted: txEvidence(halted),
+    };
+
+
     const output = JSON.stringify(evidence, null, 2);
     if (process.env.EVIDENCE_FILE) await writeFile(process.env.EVIDENCE_FILE, output + '\n');
     console.log(JSON.stringify({

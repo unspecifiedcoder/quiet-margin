@@ -125,17 +125,18 @@ function positionContext(market, nonce, trader) {
   return base64(SHA(label('xythum:position:v1:'), bytes(market), le32(nonce), Buffer.from(trader)));
 }
 
-function prepare({ market, nonce, trader, recipients, provingDir }) {
+function prepare({ market, nonce, trader, recipients, provingDir, fixture }) {
   const witness = {
     context: positionContext(market, nonce, trader),
     size_lots: 10,
     entry_ticks: 10_000,
     margin_cents: 50_000,
+    ...fixture,
     blinder: base64(randomBytes(32)),
   };
   const opened = prover('prove-open', provingDir, witness);
   const ciphertexts = recipients.map((recipient) => encrypt(witness, recipient, opened.commitment));
-  const mismatched = encrypt({ ...witness, margin_cents: 50_001 }, recipients[1], opened.commitment);
+  const mismatched = encrypt({ ...witness, margin_cents: witness.margin_cents + 1 }, recipients[1], opened.commitment);
   return { ...opened, ciphertexts, mismatched };
 }
 

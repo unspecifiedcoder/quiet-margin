@@ -2,6 +2,9 @@ name: Native NEAR Sandbox
 
 on:
   push:
+    paths-ignore:
+      - 'docs/**'
+      - 'README.md'
   workflow_dispatch:
 
 permissions:
