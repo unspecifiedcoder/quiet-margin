@@ -19,7 +19,20 @@ const QUIET = { log() {}, warn() {}, error() {}, debug() {}, verbose() {}, fatal
 utils.Logger.overrideLogger(QUIET);
 createRequire(import.meta.url)('near-api-js').utils.Logger.overrideLogger(QUIET);
 
-export const codeHashOf = (wasm) => utils.serialize.base_encode(createHash('sha256').update(wasm).digest());
+// near-api-js 5 maps a view_account on an absent account to a TypedError of
+// type AccountDoesNotExist ("Can't complete the action because account X
+// doesn't exist"); raw nodes say "account X does not exist while viewing" or
+// UNKNOWN_ACCOUNT. Only an error naming this exact account counts as absence,
+// so an access-key, RPC or transport failure is still thrown.
+const MISSING_TYPES = new Set(['AccountDoesNotExist', 'UNKNOWN_ACCOUNT']);
+const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+export function isMissingAccount(error, accountId) {
+  const message = String(error?.message ?? '');
+  if (MISSING_TYPES.has(error?.type) && message.includes(accountId)) return true;
+  return new RegExp('\\baccount ' + escapeRegExp(accountId) + " (?:doesn't|does not) exist\\b", 'i').test(message);
+}
+
+export const codeHashOf =(wasm) => utils.serialize.base_encode(createHash('sha256').update(wasm).digest());
 
 export async function connectTestnet() {
   const { env, roles } = loadDemoEnv();
@@ -57,7 +70,7 @@ export async function createTestnetAdapter({ env, roles, chain, accounts, finali
         const state = await chain.provider.query({ request_type: 'view_account', finality: 'final', account_id: accountId });
         return { amount: state.amount, locked: state.locked, code_hash: state.code_hash, storage_usage: state.storage_usage };
       } catch (error) {
-        if (/does not exist|UNKNOWN_ACCOUNT/i.test(String(error?.message ?? error) + String(error?.type ?? ''))) return null;
+        if (isMissingAccount(error, accountId)) return null;
         throw error;
       }
     },
