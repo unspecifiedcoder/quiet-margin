@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -15,11 +15,24 @@ const accounts = await demoAccounts(chain, roles);
 const { DEMO: root, MARKET: market, TOKEN: token, TRADER: trader, MAKER: maker,
   ORACLE: oracle, KEEPER_A: keeperA, KEEPER_B: keeperB } = accounts;
 const provingDir = join(TESTNET_DIR, 'proving');
+const witnessDir = join(TESTNET_DIR, 'witnesses');
+const positionDir = join(TESTNET_DIR, 'positions');
+const noCode = '11111111111111111111111111111111';
 const keeperRoles = ['KEEPER_A', 'KEEPER_B'];
 const keepers = [keeperA, keeperB];
 const ONE_YOCTO = { attachedDeposit: 1n };
 const sha256 = (data) => createHash('sha256').update(data).digest('hex');
 const vkNames = ['open', 'liquidation', 'close'];
+const keyFiles = vkNames.flatMap((kind) => [kind + '.pk', kind + '.vk']);
+
+function positionId(commitment) {
+  const raw = Buffer.from(commitment, 'base64');
+  assert.equal(raw.length, 32);
+  return raw.toString('hex');
+}
+
+const witnessFile = (commitment) => join(witnessDir, positionId(commitment) + '.witness.json');
+const positionFile = (commitment) => join('positions', positionId(commitment) + '.json');
 
 await mkdir(TESTNET_DIR, { recursive: true });
 const view = (account, method, args) => viewFinal(chain, account.accountId, method, args);
@@ -44,8 +57,13 @@ async function call(account, target, method, args, options) {
 }
 
 async function loadProofKeys(create) {
-  if (existsSync(provingDir)) return prover('keys', provingDir);
-  assert.ok(create, 'the deployment proving keys are missing');
+  if (keyFiles.every((file) => existsSync(join(provingDir, file)))) return prover('keys', provingDir);
+  assert.ok(create, 'restore the complete proving-key backup for this deployment');
+  if (existsSync(provingDir)) {
+    assert.equal((await market.accountView()).code_hash, noCode,
+      'restore the complete proving-key backup for this deployment');
+    await rename(provingDir, join(TESTNET_DIR, 'incomplete-proving-' + randomUUID()));
+  }
   const staged = await mkdtemp(join(TESTNET_DIR, 'proving-build-'));
   try {
     const keys = prover('setup', staged);
@@ -73,7 +91,7 @@ async function assertConfig(keys) {
 
 async function deploy(account, wasm, method, args) {
   const state = await account.accountView();
-  if (state.code_hash !== '11111111111111111111111111111111') {
+  if (state.code_hash !== noCode) {
     assert.equal(sha256(await account.viewCode()), sha256(wasm), 'existing Wasm differs for ' + account.accountId);
     return;
   }
@@ -198,15 +216,23 @@ async function runDemo() {
     return current;
   };
 
+  await mkdir(positionDir, { recursive: true });
+  await mkdir(witnessDir, { recursive: true });
   await withKeepers(async (keeperInput) => {
     const marketId = await view(market, 'get_market');
-    const admit = async (name, nonce, fundingCheckpoint, traderWitnessPath) => {
+    const admit = async (name, nonce, fundingCheckpoint) => {
+      const temporaryWitness = name === 'profit'
+        ? join(witnessDir, 'pending-' + randomUUID() + '.witness.json')
+        : undefined;
       const prepared = actor('prepare', {
         market: marketId, nonce, trader: trader.accountId, fundingCheckpoint, openPriceTicks: 10_000,
         recipients: keeperRoles.map((role) => env['NEAR_' + role + '_ENCRYPTION_PUBLIC']),
-        provingDir, traderWitnessPath,
+        provingDir, traderWitnessPath: temporaryWitness,
       });
       const { commitment, quote_terms, ciphertexts, proof } = prepared;
+      const position = { market: market.accountId, nonce, commitment, fundingCheckpoint, fixture: name };
+      await record(positionFile(commitment), position);
+      if (temporaryWitness) await rename(temporaryWitness, witnessFile(commitment));
       await track(name + '_stage', call(trader, market, 'stage_position', { nonce, commitment, quote_terms, ciphertexts }));
       const pending = await view(market, 'get_pending');
       assert.equal(pending.funding_checkpoint, fundingCheckpoint);
@@ -218,13 +244,12 @@ async function runDemo() {
       const acknowledgments = [0, 1].map((index) => actor('ack', keeperInput(index)).signature);
       await track(name + '_open', call(trader, market, 'open', { nonce, commitment, acknowledgments, proof }));
       assert.equal((await active()).commitment, commitment);
+      return commitment;
     };
 
     await publish('entry_oracle', 10_000, checkpoint);
-    const witnessDir = join(TESTNET_DIR, 'witnesses');
-    await mkdir(witnessDir, { recursive: true });
-    const traderWitnessPath = join(witnessDir, 'trader-' + initialNonce + '.witness.json');
-    await admit('profit', initialNonce, checkpoint, traderWitnessPath);
+    const profitCommitment = await admit('profit', initialNonce, checkpoint);
+    const traderWitnessPath = witnessFile(profitCommitment);
     await publish('profit_oracle', 12_000, checkpoint + 200);
     const close = actor('prove-close', { ...actorInput, traderWitnessPath }).close;
     assert.equal(close.refund, 79_800);
@@ -322,9 +347,16 @@ async function resumeActive() {
   await assertConfig(await loadProofKeys(false));
   const active = await view(market, 'get_active');
   assert.ok(active, 'there is no active testnet demo position');
+  const identity = JSON.parse(await readFile(join(TESTNET_DIR, positionFile(active.commitment)), 'utf8'));
+  assert.equal(identity.market, market.accountId);
+  assert.equal(identity.nonce, active.nonce);
+  assert.equal(identity.commitment, active.commitment);
+  assert.equal(identity.fundingCheckpoint, active.funding_checkpoint);
+  assert.ok(['profit', 'liquidation'].includes(identity.fixture));
+  const traderWitnessPath = witnessFile(active.commitment);
+  const close = identity.fixture === 'profit';
+  if (close) assert.ok(existsSync(traderWitnessPath), 'the trader witness for the active position is missing');
   const previous = await view(market, 'get_oracle');
-  const traderWitnessPath = join(TESTNET_DIR, 'witnesses', 'trader-' + active.nonce + '.witness.json');
-  const close = existsSync(traderWitnessPath);
   const evidence = { network: 'testnet', market: market.accountId, nonce: active.nonce };
   const evidenceFile = 'resume-' + active.nonce + '.json';
 

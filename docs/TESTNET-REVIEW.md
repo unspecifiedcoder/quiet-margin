@@ -8,8 +8,8 @@ authorization, arithmetic, receipt order, and callback recovery.
 ## Standards
 
 - Maker approval now signs the exact staged opening mark with the position
-  and quote digests. The Sandbox regression restages the same digests at
-  a different mark and rejects the obsolete approval.
+  and quote digests. The Sandbox regression rejects an approval carrying a different
+  opening mark.
 - The testnet deployer generates keys in a temporary sibling directory
   and publishes the complete set together. A failed setup can be retried.
 - Each liquidation or close consumes the active slot in the same receipt
