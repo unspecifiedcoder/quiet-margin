@@ -392,25 +392,28 @@ export function mountExchange(root, handlers = {}) {
         EXAMPLE_TX.flatMap(([label, hash], i) => [
           i ? h('span', { class: 'xc-muted', text: ' · ' }) : null,
           h('a', {
-            class: 'xc-link', href: `https://testnet.nearblocks.io/txns/${hash}`, target: '_blank', rel: 'noopener noreferrer',
-            title: hash, 'aria-label': `Example ${label.toLowerCase()} receipt ${shortHash(hash, 4, 4)} on testnet NearBlocks (archived example, new tab)`,
+            class: 'xc-link', href: `https://testnet.near.rocks/tx/${hash}`, target: '_blank', rel: 'noopener noreferrer',
+            title: hash, 'aria-label': `Example ${label.toLowerCase()} receipt ${shortHash(hash, 4, 4)} on testnet near.rocks explorer (archived example, new tab)`,
           }, `${label} ${shortHash(hash, 4, 4)}`),
         ]))));
 
   // ---------- dialog ----------
   r.dlgTitle = h('h2', { id: `${id}-dlg-t`, class: 'xc-dialog__title' });
+  // The description is one short sentence; the structured body is read in
+  // place rather than announced as a single run-on description.
+  r.dlgDesc = h('p', { class: 'xc-small', id: `${id}-dlg-d` });
   r.dlgBody = h('div', { class: 'xc-dialog__body', id: `${id}-dlg-b` });
   r.dlgConfirm = h('button', { type: 'button', class: 'xc-btn xc-btn--act', text: 'Confirm' });
   r.dlgCancel = h('button', { type: 'button', class: 'xc-btn xc-btn--ghost', text: 'Cancel' });
-  r.dialog = h('dialog', { class: 'xc-dialog', 'aria-labelledby': r.dlgTitle.id, 'aria-describedby': r.dlgBody.id },
-    r.dlgTitle, r.dlgBody, h('div', { class: 'xc-dialog__actions' }, r.dlgCancel, r.dlgConfirm));
+  r.dialog = h('dialog', { class: 'xc-dialog', 'aria-labelledby': r.dlgTitle.id, 'aria-describedby': r.dlgDesc.id },
+    r.dlgTitle, r.dlgDesc, r.dlgBody, h('div', { class: 'xc-dialog__actions' }, r.dlgCancel, r.dlgConfirm));
   r.dlgCancel.addEventListener('click', () => closeDialog());
   r.dialog.addEventListener('cancel', (e) => { e.preventDefault(); closeDialog(); });
   r.dlgConfirm.addEventListener('click', () => {
     if (!dialogSpec || r.dlgConfirm.disabled) return;
     const spec = dialogSpec;
-    if (spec.ackRound !== undefined && spec.ackRound !== (state.oracle?.round ?? null)) {
-      spec.ackRound = state.oracle?.round ?? null;
+    if (markStale(spec)) {
+      spec.ackMark = currentMark();
       renderDialog();
       return;
     }
@@ -605,14 +608,20 @@ export function mountExchange(root, handlers = {}) {
       title: 'Review long BTC-PERP',
       handler: 'onOpen',
       confirmLabel: 'Sign and open',
-      ackRound: state.oracle?.round ?? null,
-      args: () => [{ sizeBtc: lotsToBtcString(lots.value), marginUsd: centsToString(margin.value) }],
+      ackMark: currentMark(),
+      describe: () => `Opens a long of ${lotsToBtcString(lots.value)} BTC with ${formatCents(margin.value)} ${COLLATERAL} margin at the oracle mark of round ${state.oracle?.round ?? '—'}.`,
+      // Called only when the acknowledged mark equals the live one, so the
+      // reviewed quote is exactly what the dialog showed.
+      args: () => [{
+        sizeBtc: lotsToBtcString(lots.value), marginUsd: centsToString(margin.value),
+        reviewedQuote: { priceTicks: dialogSpec.ackMark.priceTicks, fundingCents: dialogSpec.ackMark.fundingCents },
+      }],
       build: () => {
         const f = readForm();
         const q = f.quote;
         const out = [];
-        if (dialogSpec.ackRound !== (state.oracle?.round ?? null)) {
-          out.push(h('p', { class: 'xc-notice', role: 'alert', text: `The mark moved to round ${state.oracle?.round}. Figures below use the new mark. Confirm again to proceed.` }));
+        if (markStale(dialogSpec)) {
+          out.push(h('p', { class: 'xc-notice', role: 'alert', text: `The mark moved to round ${state.oracle?.round}. Figures below use the new mark and funding index. Confirm again to proceed.` }));
         }
         if (q) {
           out.push(h('dl', { class: 'xc-rows xc-quote' },
@@ -620,6 +629,7 @@ export function mountExchange(root, handlers = {}) {
             row('Size', h('span', {}, `${lotsToBtcString(q.lots)} `, unit('BTC'), h('span', { class: 'xc-muted', text: ` · ${q.lots} lots` }))),
             row('Margin', h('span', {}, `${formatCents(q.marginCents)} `, unit())),
             row('Oracle round', String(state.oracle?.round ?? '—')),
+            row('Funding index', h('span', {}, `${Number.isFinite(state.oracle?.funding_cents) ? formatCents(state.oracle.funding_cents) : '—'} `, unit())),
             ...quoteRows(q)));
         }
         out.push(h('p', { class: 'xc-small', text: 'This one confirmation authorizes your browser to sign and submit every transaction the open needs: it stages a private commitment, gets maker approval at this mark and keeper acknowledgments, builds the open proof, and submits the open. The quote expires if the mark changes before the open lands.' }));
@@ -639,6 +649,7 @@ export function mountExchange(root, handlers = {}) {
       title: kind === 'deposit' ? 'Deposit collateral' : 'Withdraw collateral',
       handler: kind === 'deposit' ? 'onDeposit' : 'onWithdraw',
       confirmLabel: kind === 'deposit' ? 'Sign deposit' : 'Sign withdrawal',
+      describe: `${kind === 'deposit' ? 'Deposits' : 'Withdraws'} ${formatCents(res.value)} ${COLLATERAL} ${kind === 'deposit' ? 'from your wallet into the market' : 'from the market to your wallet'}.`,
       args: () => [amount],
       build: () => {
         const b = state.balances;
@@ -849,6 +860,7 @@ export function mountExchange(root, handlers = {}) {
       title: 'Close position',
       handler: 'onClose',
       confirmLabel: 'Sign and close',
+      describe: 'Closes the whole position at the latest oracle mark.',
       args: () => [],
       build: () => {
         const pv = positionView();
@@ -1143,6 +1155,17 @@ export function mountExchange(root, handlers = {}) {
 
   // ---------- dialog lifecycle ----------
   let returnFocus = null;
+  function currentMark() {
+    const o = state.oracle;
+    return o ? { round: o.round, priceTicks: o.price_ticks, fundingCents: o.funding_cents } : null;
+  }
+  // A reviewed open is stale when the round, price or funding index moved.
+  function markStale(spec) {
+    if (!spec || spec.ackMark === undefined) return false;
+    const a = spec.ackMark, b = currentMark();
+    if (!a || !b) return a !== b;
+    return a.round !== b.round || a.priceTicks !== b.priceTicks || a.fundingCents !== b.fundingCents;
+  }
   function openDialog(spec) {
     dialogSpec = spec;
     returnFocus = document.activeElement;
@@ -1160,10 +1183,15 @@ export function mountExchange(root, handlers = {}) {
   function renderDialog() {
     if (!dialogSpec) return;
     setText(r.dlgTitle, dialogSpec.title);
+    const desc = typeof dialogSpec.describe === 'function' ? dialogSpec.describe() : dialogSpec.describe;
+    setText(r.dlgDesc, desc ?? '');
+    r.dlgDesc.hidden = !desc;
+    if (desc) r.dialog.setAttribute('aria-describedby', r.dlgDesc.id);
+    else r.dialog.removeAttribute('aria-describedby');
     const { nodes, blocked } = dialogSpec.build();
     // replaceChildren stringifies null, so drop empty slots explicitly.
     r.dlgBody.replaceChildren(...[...nodes, blocked ? h('p', { class: 'xc-blocker', text: blocked }) : null].filter(Boolean));
-    const stale = dialogSpec.ackRound !== undefined && dialogSpec.ackRound !== (state.oracle?.round ?? null);
+    const stale = markStale(dialogSpec);
     setText(r.dlgConfirm, stale ? `Confirm at round ${state.oracle?.round}` : dialogSpec.confirmLabel);
     r.dlgConfirm.className = `xc-btn ${dialogSpec.handler === 'onClose' ? 'xc-btn--risk' : 'xc-btn--act'}`;
     r.dlgConfirm.disabled = Boolean(blocked) || controlsLocked() || !has(dialogSpec.handler);

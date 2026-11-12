@@ -85,7 +85,7 @@ test('full user flow: deposit, open, mark, close, withdraw', async () => {
   assert.deepEqual([last().balances.wallet, last().balances.available], [30_000 + 19_800, 70_200]);
   const labels = last().receipts.map((r) => r.label);
   for (const l of ['deposit', 'stage', 'maker approval', 'open', 'close', 'withdraw', 'mark']) assert.ok(labels.includes(l), l);
-  assert.ok(last().receipts.every((r) => r.explorerUrl.startsWith('https://testnet.nearblocks.io/txns/')));
+  assert.ok(last().receipts.every((r) => r.explorerUrl.startsWith('https://testnet.near.rocks/tx/')));
 });
 
 test('a failed approval resumes after reload without restaging or reproving', async () => {
@@ -213,7 +213,7 @@ test('a background Keeper B liquidation appears verified in the same open tab', 
   assert.equal(s.position, null);
   assert.equal(s.balances.available, 11_900);
   assert.deepEqual(receiptFor(s, hash), {
-    label: 'liquidation_1', hash, explorerUrl: 'https://testnet.nearblocks.io/txns/' + hash,
+    label: 'liquidation_1', hash, explorerUrl: 'https://testnet.near.rocks/tx/' + hash,
   });
   assert.match(s.notice, new RegExp('Keeper B liquidated position nonce 1 on chain in ' + hash));
   assert.equal(await store.get('keeper'), undefined);

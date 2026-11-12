@@ -46,7 +46,7 @@ const QUOTE_MARGIN_BLOCKS = 20;
 const POLL_MS = 8_000;
 
 export const explorerUrl = (network, hash) => (network === 'testnet'
-  ? 'https://testnet.nearblocks.io/txns/' + encodeURIComponent(hash)
+  ? 'https://testnet.near.rocks/tx/' + encodeURIComponent(hash)
   : null);
 
 const usd = (cents) => cents / 100;

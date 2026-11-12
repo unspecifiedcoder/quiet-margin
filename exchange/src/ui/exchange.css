@@ -13,6 +13,7 @@ html, body { margin: 0; background: #101721; }
   --well: #0d131c;
   --line: #2b3b50;
   --line-2: #3b4f69;
+  --field-line: #61799a;
   --ink: #edf3fc;
   --muted: #a4b4c9;
   --act: #ffae95;
@@ -284,8 +285,10 @@ html, body { margin: 0; background: #101721; }
 .xc-field__err { font-size: 12.5px; color: var(--risk); }
 .xc-input-wrap {
   display: flex; align-items: center; gap: 6px; padding: 0 6px 0 12px; min-height: 44px;
-  border: 1px solid var(--line-2); border-radius: 8px; background: var(--well);
+  border: 1px solid var(--field-line); border-radius: 8px; background: var(--well);
 }
+/* Enabled field edge is >= 3:1 against both the well and the card surface. */
+.xc-input-wrap:has(.xc-input:disabled) { border-color: var(--line-2); }
 .xc-input-wrap:focus-within { border-color: var(--ink); box-shadow: 0 0 0 1px var(--ink); }
 .xc-input-wrap:has([aria-invalid='true']) { border-color: var(--risk); }
 .xc-input-wrap:has(.xc-stepper:first-child) { padding-left: 6px; }
@@ -407,6 +410,7 @@ html, body { margin: 0; background: #101721; }
 }
 .xc-dialog::backdrop { background: rgb(6 10 16 / 0.72); }
 .xc-dialog__title { margin: 0; padding: 18px 20px 0; font-size: 17px; font-weight: 650; }
+.xc-dialog__title + .xc-small { margin: 0; padding: 6px 20px 0; color: var(--muted); }
 .xc-dialog__body { padding: 14px 20px; display: grid; gap: 12px; font-size: 13.5px; }
 .xc-dialog__actions { display: flex; justify-content: flex-end; gap: 8px; padding: 0 20px 18px; flex-wrap: wrap; }
 
@@ -418,10 +422,16 @@ html, body { margin: 0; background: #101721; }
   .xc-strip { gap: 10px 24px; }
 }
 @media (max-width: 880px) {
-  .xc-top { padding: 10px 14px; position: static; }
-  .xc-who { margin-left: 0; align-items: flex-start; flex-basis: 100%; }
-  .xc-strip { padding: 12px 14px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 16px; }
-  .xc-strip__pair { grid-column: 1 / -1; }
+  .xc-top { padding: 8px 14px; position: static; gap: 6px 12px; min-height: 0; }
+  /* Session id and key custody share one wrapping line. */
+  .xc-who { margin-left: 0; flex-direction: row; flex-wrap: wrap; align-items: baseline; gap: 0 10px; flex-basis: 100%; }
+  /* Pair beside the mark, then round, funding and change in one row. */
+  .xc-strip { padding: 10px 14px; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px 12px; }
+  .xc-strip__pair { grid-column: 1 / 4; margin-right: 0; }
+  .xc-strip__pair .xc-pair { font-size: 18px; }
+  .xc-strip__fig { grid-column: span 2; }
+  .xc-strip__pair + .xc-strip__fig { grid-column: 4 / 7; align-items: flex-end; text-align: right; }
+  .xc-strip__fig > span:last-child { white-space: normal; }
   .xc-statusbar { padding: 8px 14px 0; }
   .xc-grid {
     grid-template-columns: minmax(0, 1fr); grid-template-areas: 'ticket' 'chart' 'book' 'privacy'; grid-template-rows: none;
