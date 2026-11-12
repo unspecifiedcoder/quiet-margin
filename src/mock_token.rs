@@ -167,13 +167,6 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Method new is private")]
-    fn init_is_private() {
-        testing_env!(ctx(accounts(1)).build());
-        let _ = MockToken::new(accounts(1), U128(1));
-    }
-
-    #[test]
     fn transfer_between_registered_accounts() {
         testing_env!(ctx(accounts(0)).build());
         let mut c = MockToken::new(accounts(1), U128(1_000));

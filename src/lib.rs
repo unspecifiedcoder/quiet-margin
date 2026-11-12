@@ -16,8 +16,9 @@ pub use clearing::*;
 
 #[cfg(not(feature = "mock-token"))]
 mod clearing {
-    use crate::verifier;
+    use crate::verifier::{self, liquidation_inputs, open_inputs};
     use near_sdk::json_types::{Base64VecU8, U128};
+    use near_sdk::serde_json::{Value, json};
     use near_sdk::{
         AccountId, Gas, NearToken, PanicOnDefault, Promise, PromiseError, PromiseOrValue, env,
         ext_contract, log, near, require,
@@ -75,6 +76,7 @@ mod clearing {
         pub const ERR_DEPLOYMENT_ID_LEN: &str = "ERR_DEPLOYMENT_ID_LEN";
         pub const ERR_OPEN_VK_LEN: &str = "ERR_OPEN_VK_LEN";
         pub const ERR_LIQUIDATION_VK_LEN: &str = "ERR_LIQUIDATION_VK_LEN";
+        pub const ERR_INVALID_VK: &str = "ERR_INVALID_VK";
         pub const ERR_ROUND_ZERO: &str = "ERR_ROUND_ZERO";
         pub const ERR_ROUND_NOT_INCREASING: &str = "ERR_ROUND_NOT_INCREASING";
         pub const ERR_PRICE_RANGE: &str = "ERR_PRICE_RANGE";
@@ -162,48 +164,6 @@ mod clearing {
         data
     }
 
-    /// 32-byte little-endian scalar of an unsigned integer.
-    pub fn scalar_u64(value: u64) -> [u8; 32] {
-        let mut s = [0u8; 32];
-        s[..8].copy_from_slice(&value.to_le_bytes());
-        s
-    }
-
-    /// `(low128, high128)` scalars: first and last 16 digest bytes, LE.
-    pub fn split_digest(digest: &[u8; 32]) -> ([u8; 32], [u8; 32]) {
-        let mut lo = [0u8; 32];
-        let mut hi = [0u8; 32];
-        lo[..16].copy_from_slice(&digest[..16]);
-        hi[..16].copy_from_slice(&digest[16..]);
-        (lo, hi)
-    }
-
-    /// `[commitment_low128, commitment_high128, context_low128, context_high128]`.
-    pub fn open_public_inputs(commitment: &[u8; 32], context: &[u8; 32]) -> Vec<[u8; 32]> {
-        let (c_lo, c_hi) = split_digest(commitment);
-        let (x_lo, x_hi) = split_digest(context);
-        vec![c_lo, c_hi, x_lo, x_hi]
-    }
-
-    /// Open inputs followed by `[round, price_ticks, funding_cents, refund, bad_debt]`.
-    pub fn liquidation_public_inputs(
-        commitment: &[u8; 32],
-        context: &[u8; 32],
-        round: u64,
-        price_ticks: u32,
-        funding_cents: u32,
-        refund: u64,
-        bad_debt: u64,
-    ) -> Vec<[u8; 32]> {
-        let mut inputs = open_public_inputs(commitment, context);
-        inputs.push(scalar_u64(round));
-        inputs.push(scalar_u64(price_ticks.into()));
-        inputs.push(scalar_u64(funding_cents.into()));
-        inputs.push(scalar_u64(refund));
-        inputs.push(scalar_u64(bad_debt));
-        inputs
-    }
-
     fn verify_proof(vk: &[u8], proof: &[u8], inputs: &[[u8; 32]]) -> bool {
         #[cfg(not(test))]
         {
@@ -215,6 +175,16 @@ mod clearing {
             let _: fn(&[u8], &[u8], &[[u8; 32]]) -> bool = verifier::verify;
             tests::proof_hook_accepts(vk, proof, inputs)
         }
+    }
+
+    fn emit(event: &str, data: Value) {
+        let payload = json!({
+            "standard": "xythum_near_perps",
+            "version": "1.0.0",
+            "event": event,
+            "data": [data],
+        });
+        env::log_str(&format!("EVENT_JSON:{payload}"));
     }
 
     fn hash32(bytes: &[u8], err: &str) -> [u8; 32] {
@@ -426,6 +396,12 @@ mod clearing {
                 ERR_LIQUIDATION_VK_LEN
             );
 
+            require!(
+                verifier::validate_vk(&open_vk.0, verifier::OPEN_INPUTS)
+                    && verifier::validate_vk(&liquidation_vk.0, verifier::LIQUIDATION_INPUTS),
+                ERR_INVALID_VK
+            );
+
             Self {
                 market: market_hash(&deployment_id, &contract_id),
                 token_id,
@@ -495,7 +471,10 @@ mod clearing {
             } else {
                 self.ledger.maker_vault = add(self.ledger.maker_vault, cents);
             }
-            log!("deposit {} cents to {}", cents, msg);
+            emit(
+                "collateral_deposited",
+                json!({ "cents": cents, "bucket": msg }),
+            );
             PromiseOrValue::Value(U128(0))
         }
 
@@ -641,7 +620,7 @@ mod clearing {
             }
 
             let context = position_context(&self.market, nonce, &self.trader_id);
-            let inputs = open_public_inputs(&commitment, &context);
+            let inputs = open_inputs(&commitment, &context);
             require!(
                 verify_proof(&self.open_vk, &proof.0, &inputs),
                 ERR_PROOF_INVALID
@@ -662,7 +641,7 @@ mod clearing {
                 .unwrap_or_else(|| env::panic_str(ERR_NO_PENDING));
             self.active = Some(pending.slot);
             self.ledger = ledger;
-            log!("opened nonce {}", nonce);
+            emit("position_opened", json!({ "nonce": nonce }));
         }
 
         // -----------------------------------------------------------------
@@ -710,12 +689,12 @@ mod clearing {
             require!(vault_after >= reserved_after, ERR_RESERVE_COVERAGE);
 
             let context = position_context(&self.market, nonce, &self.trader_id);
-            let inputs = liquidation_public_inputs(
+            let inputs = liquidation_inputs(
                 &root,
                 &context,
                 oracle.round,
-                oracle.price_ticks,
-                oracle.funding_cents,
+                oracle.price_ticks.into(),
+                oracle.funding_cents.into(),
                 refund,
                 bad_debt,
             );
@@ -738,13 +717,15 @@ mod clearing {
             }
             self.active = None;
             self.ledger = ledger;
-            log!(
-                "liquidated nonce {} round {} refund {} bad_debt {} keeper {}",
-                nonce,
-                round,
-                refund,
-                bad_debt,
-                keeper_index
+            emit(
+                "position_liquidated",
+                json!({
+                    "nonce": nonce,
+                    "round": round,
+                    "refund": refund,
+                    "bad_debt": bad_debt,
+                    "keeper_index": keeper_index,
+                }),
             );
         }
 
@@ -805,13 +786,14 @@ mod clearing {
                 Ok(_) | Err(PromiseError::TooLong(_)) => true,
                 Err(_) => false,
             };
-            if ok {
-                log!("withdrawal of {} cents settled", cents);
-            } else {
+            if !ok {
                 let available = self.available_mut(claimant);
                 *available = add(*available, cents);
-                log!("withdrawal of {} cents restored", cents);
             }
+            emit(
+                "withdrawal_resolved",
+                json!({ "cents": cents, "account_id": account_id, "success": ok }),
+            );
             ok
         }
 
@@ -926,8 +908,8 @@ mod clearing {
             })
         }
 
-        fn accept(vk: &[u8], proof: &[u8], inputs: Vec<[u8; 32]>) {
-            ACCEPT.with(|a| *a.borrow_mut() = Some((vk.to_vec(), proof.to_vec(), inputs)));
+        fn accept(vk: &[u8], proof: &[u8], inputs: impl Into<Vec<[u8; 32]>>) {
+            ACCEPT.with(|a| *a.borrow_mut() = Some((vk.to_vec(), proof.to_vec(), inputs.into())));
         }
 
         fn acc(s: &str) -> AccountId {
@@ -957,12 +939,19 @@ mod clearing {
         const OPEN_PROOF: &[u8] = b"open-proof";
         const LIQ_PROOF: &[u8] = b"liquidation-proof";
 
+        fn fixture_vk(n_inputs: usize) -> Vec<u8> {
+            let g1 = env::bls12381_map_fp_to_g1([0; 48]).unwrap();
+            let g2 = env::bls12381_map_fp2_to_g2([0; 96]).unwrap();
+            [g1.clone(), g2.repeat(3), g1.repeat(n_inputs + 1)].concat()
+        }
+
         fn open_vk() -> Vec<u8> {
-            vec![1; verifier::OPEN_VK_LEN]
+            fixture_vk(verifier::OPEN_INPUTS)
         }
         fn liq_vk() -> Vec<u8> {
-            vec![2; verifier::LIQUIDATION_VK_LEN]
+            fixture_vk(verifier::LIQUIDATION_INPUTS)
         }
+
         fn keys() -> [SigningKey; 2] {
             [
                 SigningKey::from_bytes(&[11; 32]),
@@ -1063,11 +1052,7 @@ mod clearing {
 
         fn accept_open(c: &Contract, nonce: u32) {
             let context = position_context(&c.market, nonce, &trader());
-            accept(
-                &open_vk(),
-                OPEN_PROOF,
-                open_public_inputs(&COMMIT, &context),
-            );
+            accept(&open_vk(), OPEN_PROOF, open_inputs(&COMMIT, &context));
         }
 
         /// Funded, oracle round 1 at funding zero, staged and approved, open
@@ -1099,7 +1084,15 @@ mod clearing {
             accept(
                 &liq_vk(),
                 LIQ_PROOF,
-                liquidation_public_inputs(&COMMIT, &context, round, price, funding, refund, debt),
+                liquidation_inputs(
+                    &COMMIT,
+                    &context,
+                    round,
+                    price.into(),
+                    funding.into(),
+                    refund,
+                    debt,
+                ),
             );
         }
 
@@ -1204,34 +1197,18 @@ mod clearing {
             for (i, b) in d.iter_mut().enumerate() {
                 *b = i as u8;
             }
-            let (lo, hi) = split_digest(&d);
+            let [lo, hi] = verifier::digest_scalars(&d);
             assert_eq!(&lo[..16], &d[..16]);
             assert_eq!(&hi[..16], &d[16..]);
             assert!(lo[16..].iter().chain(&hi[16..]).all(|b| *b == 0));
-            assert_eq!(scalar_u64(0x0102)[..3], [2, 1, 0]);
+            assert_eq!(verifier::u64_scalar(0x0102)[..3], [2, 1, 0]);
 
-            let li = liquidation_public_inputs(&d, &context, 3, 5_200, 200, 11_700, 0);
+            let li = liquidation_inputs(&d, &context, 3, 5_200, 200, 11_700, 0);
             assert_eq!(li.len(), 9);
-            assert_eq!(li[..4], open_public_inputs(&d, &context)[..]);
-            assert_eq!(li[4], scalar_u64(3));
-            assert_eq!(li[5], scalar_u64(5_200));
-            assert_eq!(li[7], scalar_u64(11_700));
-        }
-
-        #[test]
-        #[should_panic(expected = "Method init is private")]
-        fn init_is_private() {
-            ctx(trader(), 1);
-            let _ = Contract::init(
-                token(),
-                trader(),
-                maker(),
-                oracle(),
-                keeper_inputs(),
-                DEPLOYMENT.to_vec().into(),
-                open_vk().into(),
-                liq_vk().into(),
-            );
+            assert_eq!(li[..4], open_inputs(&d, &context)[..]);
+            assert_eq!(li[4], verifier::u64_scalar(3));
+            assert_eq!(li[5], verifier::u64_scalar(5_200));
+            assert_eq!(li[7], verifier::u64_scalar(11_700));
         }
 
         #[test]
@@ -1783,11 +1760,7 @@ mod clearing {
             let _ = c.withdraw(U128(100));
             assert_eq!(c.get_ledger().pending_withdrawals, 11_100);
 
-            // Only the contract may resolve; a result is required.
-            ctx_full(trader(), 301, 0, vec![PromiseResult::Failed]);
-            assert_rejects(&mut c, "Method resolve_withdraw is private", |c| {
-                c.resolve_withdraw(trader());
-            });
+            // The callback requires a promise result.
             ctx_full(contract_id(), 301, 0, vec![]);
             assert_rejects(&mut c, ERR_NO_PROMISE_RESULT, |c| {
                 c.resolve_withdraw(trader());

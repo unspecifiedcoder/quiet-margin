@@ -65,6 +65,12 @@ test('funded private liquidation by a cold backup keeper', { timeout: 480_000 },
     const mockWasm = await readFile(mockPath);
     const evidence = {
       sandbox_version: sandboxVersion,
+      toolchain: {
+        rustc: process.env.XYTHUM_RUSTC_VERSION,
+        cargo_near: process.env.XYTHUM_CARGO_NEAR_VERSION,
+        node: process.version,
+        arkworks: '0.5.0',
+      },
       market_wasm: { size_bytes: marketWasm.length, sha256: digest(marketWasm) },
       mock_token_wasm: { size_bytes: mockWasm.length, sha256: digest(mockWasm) },
       setup_ms: setupMs,
@@ -91,14 +97,29 @@ test('funded private liquidation by a cold backup keeper', { timeout: 480_000 },
     const tokenDeploy = await token.deploy(mockWasm);
     assert.ok(contractDeploy.succeeded, JSON.stringify(contractDeploy.status));
     assert.ok(tokenDeploy.succeeded, JSON.stringify(tokenDeploy.status));
-    await success(token, token, 'new', { owner_id: root.accountId, total_supply: '1000000' });
+    const tokenInit = { owner_id: root.accountId, total_supply: '1000000' };
+    const foreignTokenInit = await trader.callRaw(token, 'new', tokenInit, { gas: FULL_GAS });
+    assert.ok(foreignTokenInit.failed);
+    assert.match(JSON.stringify(foreignTokenInit.failures), /private/i);
+    await success(token, token, 'new', tokenInit);
     const deploymentId = randomBytes(32).toString('base64');
-    await success(contract, contract, 'init', {
+    const contractInit = {
       token_id: token.accountId, trader_id: trader.accountId, maker_id: maker.accountId,
       oracle_id: oracle.accountId,
       keepers: keepers.map((account, i) => ({ account_id: account.accountId, ack_key: keeperKeys[i].ack_key })),
       deployment_id: deploymentId, open_vk: keys.open_vk, liquidation_vk: keys.liquidation_vk,
-    });
+    };
+    const foreignInit = await trader.callRaw(contract, 'init', contractInit, { gas: FULL_GAS });
+    assert.ok(foreignInit.failed);
+    assert.match(JSON.stringify(foreignInit.failures), /private/i);
+    const malformedVk = Buffer.alloc(Buffer.from(keys.liquidation_vk, 'base64').length).toString('base64');
+    const badInit = await contract.callRaw(contract, 'init', {
+      ...contractInit, liquidation_vk: malformedVk,
+    }, { gas: FULL_GAS });
+    assert.ok(badInit.failed);
+    assert.match(JSON.stringify(badInit.failures), /ERR_INVALID_VK/);
+    evidence.outcomes.malformed_vk = txEvidence(badInit);
+    await success(contract, contract, 'init', contractInit);
 
     const config = await contract.view('get_config');
     assert.equal(config.open_vk_sha256, keys.open_vk_sha256);
@@ -215,6 +236,11 @@ test('funded private liquidation by a cold backup keeper', { timeout: 480_000 },
     const distressed = actor('prove', keeper(1)).liquidation;
     await reject('wrong_root', keeperB, 'liquidate',
       { ...distressed, root: replaceByte(distressed.root) }, /root|commitment|active_mismatch/i);
+    const wrongDomain = actor('prove', {
+      ...keeper(1), otherMarket: randomBytes(32).toString('base64'),
+    }).liquidation;
+    assert.equal(wrongDomain.root, distressed.root);
+    await reject('wrong_domain', keeperB, 'liquidate', wrongDomain, /proof/i);
     await reject('tampered_refund', keeperB, 'liquidate',
       { ...distressed, refund: distressed.refund + 1 }, /proof/i);
     const mutated = Buffer.from(distressed.proof, 'base64');
@@ -247,6 +273,8 @@ test('funded private liquidation by a cold backup keeper', { timeout: 480_000 },
 
     // An unregistered FT recipient triggers a failed token receipt. The private
     // callback restores the bounty, then a retry after registration pays once.
+    await reject('foreign_callback', keeperB, 'resolve_withdraw',
+      { account_id: keeperB.accountId }, /private/i);
     const failedTransfer = await keeperB.callRaw(contract, 'withdraw', { amount: '100' },
       { gas: FULL_GAS, ...ONE_YOCTO });
     assert.ok(failedTransfer.receiptFailures.length > 0);

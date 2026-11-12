@@ -168,11 +168,16 @@ async function act(command, input) {
   }
 
   const oracle = input.oracleOverride ?? await contract.view('get_oracle');
+  assert.ok(!input.otherMarket || command === 'prove');
+  const opening = input.otherMarket
+    ? { ...witness, context: positionContext(input.otherMarket, state.nonce, trader) }
+    : witness;
   const generated = prover('prove-liquidation', provingDir, {
-    ...witness, round: oracle.round, price_ticks: oracle.price_ticks,
+    ...opening, round: oracle.round, price_ticks: oracle.price_ticks,
     funding_cents: oracle.funding_cents,
   });
-  assert.equal(generated.commitment, state.commitment);
+  if (input.otherMarket) assert.notEqual(generated.commitment, state.commitment);
+  else assert.equal(generated.commitment, state.commitment);
   const liquidation = {
     nonce: state.nonce, root: state.commitment, round: oracle.round,
     refund: generated.refund, bad_debt: generated.bad_debt, proof: generated.proof,

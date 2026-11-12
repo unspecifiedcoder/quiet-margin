@@ -37,8 +37,9 @@ if [[ ! -x "$NEAR_SANDBOX_BINARY_PATH/near-sandbox" ]]; then
   tar -xzf "$archive" -C "$NEAR_SANDBOX_BINARY_PATH" --strip-components=1
 fi
 
-rustc --version
-cargo near --version
+export XYTHUM_RUSTC_VERSION="$(rustc --version)"
+export XYTHUM_CARGO_NEAR_VERSION="$(cargo near --version)"
+printf '%s\n' "$XYTHUM_RUSTC_VERSION" "$XYTHUM_CARGO_NEAR_VERSION"
 rustup target list --installed
 node --version
 "$NEAR_SANDBOX_BINARY_PATH/near-sandbox" --version
@@ -47,8 +48,9 @@ cargo fmt --all -- --check
 cargo fmt --manifest-path prover/Cargo.toml --all -- --check
 cargo near build non-reproducible-wasm --locked --no-abi
 cargo near build non-reproducible-wasm --locked --no-abi --features mock-token --out-dir target/mock
-cargo test --locked --lib
-cargo test --locked --manifest-path prover/Cargo.toml --release
 cargo build --locked --manifest-path prover/Cargo.toml --release
 npm run sandbox
+cargo test --locked --lib
+cargo test --locked --lib --features mock-token
+cargo test --locked --manifest-path prover/Cargo.toml --release
 
