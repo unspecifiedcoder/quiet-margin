@@ -365,9 +365,7 @@ struct SettlementJson {
 
 fn parse<'a, T: Deserialize<'a>>(raw: &'a str, expected: &str) -> Result<T, String> {
     if raw.len() > MAX_INPUT_JSON_BYTES {
-        return Err(format!(
-            "input_json exceeds {MAX_INPUT_JSON_BYTES} bytes"
-        ));
+        return Err(format!("input_json exceeds {MAX_INPUT_JSON_BYTES} bytes"));
     }
     // serde_json errors may quote a field name but never a field value we
     // could leak; still report only the position.
@@ -489,7 +487,6 @@ pub fn key_info_json<S: KeySource + ?Sized>(pk_bytes: &S) -> Result<String, Stri
 }
 
 /// A compressed proving-key export written by [`compress_proving_key`].
-#[cfg(not(target_arch = "wasm32"))]
 pub struct CompressedKey {
     pub bytes: u64,
     /// SHA-256 of the exported file, for download integrity pinning.
@@ -502,7 +499,6 @@ pub struct CompressedKey {
 /// compression into the new file `out`. The source key and every existing
 /// file are left untouched; the export is decoded back and must equal the
 /// source key before it is written.
-#[cfg(not(target_arch = "wasm32"))]
 pub fn compress_proving_key(
     dir: &std::path::Path,
     name: &str,
@@ -516,11 +512,15 @@ pub fn compress_proving_key(
     let back = ProvingKey::<Bls12_381>::deserialize_compressed_unchecked(&bytes[..])
         .map_err(|e| api::Error::Key(e.to_string()))?;
     if back != pk {
-        return Err(api::Error::Key("compressed export does not round-trip".into()));
+        return Err(api::Error::Key(
+            "compressed export does not round-trip".into(),
+        ));
     }
     let layout = key_layout(&bytes[..]).map_err(api::Error::Key)?;
     if layout.format != KeyFormat::Compressed {
-        return Err(api::Error::Key("compressed export has an unexpected layout".into()));
+        return Err(api::Error::Key(
+            "compressed export has an unexpected layout".into(),
+        ));
     }
     let mut file = std::fs::OpenOptions::new()
         .write(true)

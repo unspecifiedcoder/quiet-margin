@@ -133,7 +133,33 @@ These figures come from synthetic keys on the developer machine: Node 22 and
 headless Chrome, single-threaded release wasm with no wasm-opt. The keys have the
 same circuits and sizes as deployed keys.
 
-<!-- MEASUREMENTS -->
+| case | key bytes | proving_ms | whole call | wasm memory peak |
+|---|---|---|---|---|
+| open, uncompressed (Node)    | 100,928,400 | 33.7 s | 34.6 s  | 462.8 MiB |
+| open, uncompressed (Chrome worker) | 100,928,400 | 37.1 s | 37.8 s | 462.8 MiB |
+| open, compressed (Node)      | 50,464,224  | 34.1 s | 177.0 s | 462.8 MiB |
+| close, uncompressed (Node)   | 51,373,488  | 14.9 s | 15.4 s  | 237.3 MiB |
+| close, compressed (Node)     | 25,686,768  | 14.7 s | 87.8 s  | 237.3 MiB |
+| close, compressed (Chrome worker) | 25,686,768 | 13.0 s | 89.0 s | 237.3 MiB |
+
+The "whole call" figure includes key decoding. With the original key, decoding
+takes about 1 s. With the compressed key, decompressing the points adds about
+140 s for open and 73 s for close, because wasm32 has no fast 64x64-bit
+multiply.
+
+**Recommendation:** serve the original uncompressed keys with long-lived HTTP
+caching, and keep the compressed export for bandwidth-constrained users.
+
+**Budget:** plan for about 0.5 GiB of wasm memory for open and about 0.25 GiB
+for close, plus the JS key buffer. This is far below the 4 GiB wasm32 limit, but
+it may matter on low-memory phones. The peak is the same for both key formats.
+
+The keys' circuit sizes:
+
+| statement | variables | `h_query` | `l_query` |
+|---|---|---|---|
+| open  | 157,837 | 262,143 | 157,829 |
+| close | 80,812  | 131,071 | 80,802  |
 
 ## Smoke tests
 

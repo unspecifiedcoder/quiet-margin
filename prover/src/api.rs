@@ -278,7 +278,9 @@ mod clock {
 mod clock {
     use wasm_bindgen::prelude::*;
 
-    #[wasm_bindgen(inline_js = "export function xythum_now_ms() {         const p = globalThis.performance;         return p && typeof p.now === 'function' ? p.now() : Date.now(); }")]
+    #[wasm_bindgen(
+        inline_js = "export function xythum_now_ms() { const p = globalThis.performance; return p && typeof p.now === 'function' ? p.now() : Date.now(); }"
+    )]
     extern "C" {
         fn xythum_now_ms() -> f64;
     }
@@ -292,7 +294,11 @@ mod clock {
     impl Start {
         pub fn elapsed_ms(&self) -> u64 {
             let d = xythum_now_ms() - self.0;
-            if d.is_finite() && d > 0.0 { d as u64 } else { 0 }
+            if d.is_finite() && d > 0.0 {
+                d as u64
+            } else {
+                0
+            }
         }
     }
 }
