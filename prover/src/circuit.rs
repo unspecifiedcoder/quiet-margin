@@ -1,4 +1,4 @@
-//! R1CS relations for the open and liquidation statements.
+//! R1CS relations for the v2 open, liquidation, and close statements.
 //!
 //! Every integer that participates in an inequality is decomposed into
 //! booleans, so that a comparison `a <= b` is encoded as "`b - a` is a sum of
@@ -9,8 +9,19 @@
 //! can never wrap into the accepted range.
 //!
 //! Public input order (each an Fr element, see `encoding`):
-//! open:        `[commitment_lo, commitment_hi, context_lo, context_hi]`
-//! liquidation: open || `[round, price_ticks, funding_cents, refund, bad_debt]`
+//! open:  `[commitment_lo, commitment_hi, context_lo, context_hi,
+//!          quote_terms_lo, quote_terms_hi, open_price_ticks]`
+//! liquidation and close:
+//!        `[commitment_lo, commitment_hi, context_lo, context_hi,
+//!          round, price_ticks, funding_delta_cents, refund, bad_debt]`
+//!
+//! The open relation hashes the *same* lots and entry byte witnesses into
+//! both the position commitment and the salted quote digest, and checks
+//! health at the authenticated opening mark. Liquidation and close share one
+//! settlement formula; liquidation additionally requires strict deficiency
+//! and pays a 100-cent bounty, while close has no health constraint and no
+//! bounty. Each statement has its own Groth16 key, so a proof for one never
+//! verifies under another even where the input encodings coincide.
 
 use ark_bls12_381::Fr;
 use ark_crypto_primitives::crh::sha256::constraints::Sha256Gadget;
@@ -21,15 +32,17 @@ use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef, SynthesisE
 
 use crate::encoding::{SCALAR_LEN, liquidation_inputs, open_inputs, scalars_to_fr};
 use crate::model::{
-    BOUNTY_CENTS, ESCROW_CENTS, MAINTENANCE_DIVISOR, MAX_ENTRY_TICKS, MAX_FUNDING_CENTS,
-    MAX_LEVERAGE, MAX_LOTS, MAX_MARGIN_CENTS, MIN_ENTRY_TICKS, MIN_LOTS, MIN_MARGIN_CENTS, Opening,
-    Oracle, PNL_CAP_CENTS, Settlement, commitment,
+    ESCROW_CENTS, MAINTENANCE_DIVISOR, MAX_ENTRY_TICKS, MAX_FUNDING_CENTS, MAX_LEVERAGE, MAX_LOTS,
+    MAX_MARGIN_CENTS, MAX_PRICE_TICKS, MIN_ENTRY_TICKS, MIN_LOTS, MIN_MARGIN_CENTS,
+    MIN_PRICE_TICKS, Opening, Oracle, PNL_CAP_CENTS, QUOTE_PREFIX, Settlement, SettlementKind,
+    commitment, quote_terms,
 };
 
 /// Bit width for comparison slack of derived (signed) quantities.
 const SLACK_BITS: usize = 64;
 
-/// Public statement of a liquidation.
+/// Public statement of a liquidation or a close (same layout, distinct keys).
+/// `funding_cents` is the funding index delta since the opening checkpoint.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LiquidationStatement {
     pub commitment: [u8; 32],
@@ -68,39 +81,63 @@ impl LiquidationStatement {
     }
 }
 
+/// Same public layout for both settlement modes.
+pub type SettlementStatement = LiquidationStatement;
+
 /// Public statement of an open.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OpenStatement {
     pub commitment: [u8; 32],
     pub context: [u8; 32],
+    pub quote_terms: [u8; 32],
+    pub open_price_ticks: u32,
 }
 
 impl OpenStatement {
     pub fn inputs(&self) -> Vec<[u8; SCALAR_LEN]> {
-        open_inputs(&self.commitment, &self.context).to_vec()
+        open_inputs(
+            &self.commitment,
+            &self.context,
+            &self.quote_terms,
+            self.open_price_ticks,
+        )
+        .to_vec()
     }
 
-    pub fn honest(opening: &Opening) -> Self {
+    pub fn honest(opening: &Opening, quote_blinder: &[u8; 32], open_price_ticks: u32) -> Self {
         Self {
             commitment: commitment(opening),
             context: opening.context,
+            quote_terms: quote_terms(opening, quote_blinder),
+            open_price_ticks,
         }
     }
 }
 
-/// Open relation: the commitment opens to in-bounds position parameters.
+/// Open relation: the commitment opens to in-bounds position parameters, the
+/// quote digest binds the same context, lots, and entry, and the position is
+/// healthy at the public opening mark.
 #[derive(Clone)]
 pub struct OpenCircuit {
     pub opening: Opening,
+    pub quote_blinder: [u8; 32],
     pub statement: OpenStatement,
 }
 
-/// Liquidation relation: open relation, oracle bounds, strict deficiency,
-/// and exact refund and bad debt.
+/// Liquidation relation: position relation, oracle bounds, strict
+/// deficiency, and exact refund (bounty 100) and bad debt.
 #[derive(Clone)]
 pub struct LiquidationCircuit {
     pub opening: Opening,
     pub statement: LiquidationStatement,
+}
+
+/// Close relation: position relation, oracle bounds, and exact refund
+/// (bounty 0) and bad debt. No health constraint.
+#[derive(Clone)]
+pub struct CloseCircuit {
+    pub opening: Opening,
+    pub statement: SettlementStatement,
 }
 
 /// Placeholder witness for key generation (values are never read in setup).
@@ -114,12 +151,26 @@ pub fn dummy_opening() -> Opening {
     }
 }
 
+fn dummy_settlement_statement(o: &Opening) -> SettlementStatement {
+    LiquidationStatement {
+        commitment: commitment(o),
+        context: o.context,
+        round: 1,
+        price_ticks: 1,
+        funding_cents: 0,
+        refund: 0,
+        bad_debt: 0,
+    }
+}
+
 impl OpenCircuit {
     pub fn setup_shape() -> Self {
         let o = dummy_opening();
+        let quote_blinder = [0; 32];
         Self {
             opening: o,
-            statement: OpenStatement::honest(&o),
+            quote_blinder,
+            statement: OpenStatement::honest(&o, &quote_blinder, 1),
         }
     }
 }
@@ -129,15 +180,17 @@ impl LiquidationCircuit {
         let o = dummy_opening();
         Self {
             opening: o,
-            statement: LiquidationStatement {
-                commitment: commitment(&o),
-                context: o.context,
-                round: 1,
-                price_ticks: 1,
-                funding_cents: 0,
-                refund: 0,
-                bad_debt: 0,
-            },
+            statement: dummy_settlement_statement(&o),
+        }
+    }
+}
+
+impl CloseCircuit {
+    pub fn setup_shape() -> Self {
+        let o = dummy_opening();
+        Self {
+            opening: o,
+            statement: dummy_settlement_statement(&o),
         }
     }
 }
@@ -239,6 +292,10 @@ struct PositionVars {
     lots: FpVar<Fr>,
     entry: FpVar<Fr>,
     margin: FpVar<Fr>,
+    /// The byte witnesses hashed into the commitment, reused by the quote.
+    ctx_b: Vec<UInt8<Fr>>,
+    lots_b: Vec<UInt8<Fr>>,
+    entry_b: Vec<UInt8<Fr>>,
 }
 
 fn alloc_scalar_inputs(
@@ -308,63 +365,123 @@ fn position_relation(
         lots,
         entry,
         margin,
+        ctx_b: ctx,
+        lots_b,
+        entry_b,
     })
+}
+
+/// Enforces `MIN_PRICE_TICKS <= price <= MAX_PRICE_TICKS` for an arbitrary
+/// field element (the u32 decomposition also bounds it below 2^32).
+fn enforce_price(cs: &ConstraintSystemRef<Fr>, price: &FpVar<Fr>) -> Result<(), SynthesisError> {
+    enforce_bits(cs, price, 32)?;
+    enforce_range(
+        cs,
+        price,
+        MIN_PRICE_TICKS as u64,
+        MAX_PRICE_TICKS as u64,
+        32,
+    )
 }
 
 impl ConstraintSynthesizer<Fr> for OpenCircuit {
     fn generate_constraints(self, cs: ConstraintSystemRef<Fr>) -> Result<(), SynthesisError> {
         let public = alloc_scalar_inputs(&cs, &self.statement.inputs())?;
-        position_relation(&cs, &self.opening, &public)?;
+        let pos = position_relation(&cs, &self.opening, &public[..4])?;
+        let (qt_lo, qt_hi, open_price) = (&public[4], &public[5], &public[6]);
+
+        // quote_terms = SHA256("xythum:quote:v2:" || context || quote_blinder
+        //                      || lots_u16 || entry_u16), over the same
+        // context, lots, and entry byte witnesses as the commitment.
+        let quote_blinder = UInt8::new_witness_vec(cs.clone(), &self.quote_blinder)?;
+        let mut preimage = UInt8::constant_vec(QUOTE_PREFIX);
+        preimage.extend_from_slice(&pos.ctx_b);
+        preimage.extend_from_slice(&quote_blinder);
+        preimage.extend_from_slice(&pos.lots_b);
+        preimage.extend_from_slice(&pos.entry_b);
+        debug_assert_eq!(preimage.len(), QUOTE_PREFIX.len() + 68);
+        let digest = Sha256Gadget::digest(&preimage)?;
+        let d = &digest.0;
+        assert_eq!(d.len(), 32);
+        pack_le(&d[..16])?.enforce_equal(qt_lo)?;
+        pack_le(&d[16..])?.enforce_equal(qt_hi)?;
+
+        // Authenticated opening mark in 1..=20000.
+        enforce_price(&cs, open_price)?;
+
+        // Health at the mark (equality is healthy):
+        // 20 * (margin + (open_price - entry) * lots) - open_price * lots >= 0.
+        // |terms| < 2^25, so a negative slack can never pass a 64-bit check.
+        let price_lots = open_price * &pos.lots;
+        let entry_lots = &pos.entry * &pos.lots;
+        let equity = &pos.margin + &price_lots - &entry_lots;
+        let health = &equity * Fr::from(MAINTENANCE_DIVISOR as u64) - &price_lots;
+        enforce_bits(&cs, &health, SLACK_BITS)?;
         Ok(())
     }
 }
 
-impl ConstraintSynthesizer<Fr> for LiquidationCircuit {
-    fn generate_constraints(self, cs: ConstraintSystemRef<Fr>) -> Result<(), SynthesisError> {
-        let public = alloc_scalar_inputs(&cs, &self.statement.inputs())?;
-        let pos = position_relation(&cs, &self.opening, &public[..4])?;
-        let (round, price, funding, refund, bad_debt) =
-            (&public[4], &public[5], &public[6], &public[7], &public[8]);
+/// Shared settlement relation for liquidation and close.
+fn settlement_relation(
+    cs: &ConstraintSystemRef<Fr>,
+    kind: SettlementKind,
+    opening: &Opening,
+    statement: &SettlementStatement,
+) -> Result<(), SynthesisError> {
+    let public = alloc_scalar_inputs(cs, &statement.inputs())?;
+    let pos = position_relation(cs, opening, &public[..4])?;
+    let (round, price, funding, refund, bad_debt) =
+        (&public[4], &public[5], &public[6], &public[7], &public[8]);
 
-        // round: nonzero u64 (strictly bound; any change alters the statement).
-        enforce_bits(&cs, round, 64)?;
-        enforce_bits(&cs, &(round - constant(&cs, 1)), 64)?;
-        // The authenticated oracle supports the same bounds as the entry price.
-        enforce_bits(&cs, price, 32)?;
-        enforce_range(
-            &cs,
-            price,
-            crate::model::MIN_PRICE_TICKS as u64,
-            crate::model::MAX_PRICE_TICKS as u64,
-            32,
-        )?;
-        // funding in 0..=200.
-        enforce_range(&cs, funding, 0, MAX_FUNDING_CENTS as u64, 8)?;
+    // round: nonzero u64 (strictly bound; any change alters the statement).
+    enforce_bits(cs, round, 64)?;
+    enforce_bits(cs, &(round - constant(cs, 1)), 64)?;
+    // The authenticated oracle supports the same bounds as the entry price.
+    enforce_price(cs, price)?;
+    // funding delta in 0..=200.
+    enforce_range(cs, funding, 0, MAX_FUNDING_CENTS as u64, 8)?;
 
-        let price_lots = price * &pos.lots; // < 2^38
-        let entry_lots = &pos.entry * &pos.lots; // < 2^20
-        let pnl = &price_lots - &entry_lots;
-        let base = &pos.margin - funding; // margin - funding
-        let equity = &base + &pnl;
+    let price_lots = price * &pos.lots; // < 2^38
+    let entry_lots = &pos.entry * &pos.lots; // < 2^20
+    let pnl = &price_lots - &entry_lots;
+    let base = &pos.margin - funding; // margin - funding
+    let equity = &base + &pnl;
 
+    if kind == SettlementKind::Liquidation {
         // Strict deficiency: price * lots - 20 * equity - 1 >= 0.
         let deficiency =
-            &price_lots - &equity * Fr::from(MAINTENANCE_DIVISOR as u64) - constant(&cs, 1);
-        enforce_bits(&cs, &deficiency, SLACK_BITS)?;
+            &price_lots - &equity * Fr::from(MAINTENANCE_DIVISOR as u64) - constant(cs, 1);
+        enforce_bits(cs, &deficiency, SLACK_BITS)?;
+    }
 
-        // bad_debt = max(-equity, 0)
-        enforce_max_zero(&cs, bad_debt, &(FpVar::zero() - &equity))?;
+    // bad_debt = max(-equity, 0)
+    enforce_max_zero(cs, bad_debt, &(FpVar::zero() - &equity))?;
 
-        // capped_equity = margin - funding + min(pnl, cap)
-        //               = margin - funding + pnl - max(pnl - cap, 0)
-        let excess = max_zero(&cs, &(&pnl - constant(&cs, PNL_CAP_CENTS as u64)))?;
-        let capped = &equity - &excess;
-        // refund = escrow - margin + max(capped - bounty, 0)
-        let above_bounty = max_zero(&cs, &(&capped - constant(&cs, BOUNTY_CENTS as u64)))?;
-        let expected_refund = constant(&cs, ESCROW_CENTS as u64) - &pos.margin + &above_bounty;
-        enforce_bits(&cs, refund, SLACK_BITS)?;
-        refund.enforce_equal(&expected_refund)?;
-        Ok(())
+    // capped_equity = margin - funding + min(pnl, cap)
+    //               = margin - funding + pnl - max(pnl - cap, 0)
+    let excess = max_zero(cs, &(&pnl - constant(cs, PNL_CAP_CENTS as u64)))?;
+    let capped = &equity - &excess;
+    // refund = escrow - margin + max(capped - bounty, 0)
+    let above_bounty = max_zero(cs, &(&capped - constant(cs, kind.bounty_cents() as u64)))?;
+    let expected_refund = constant(cs, ESCROW_CENTS as u64) - &pos.margin + &above_bounty;
+    enforce_bits(cs, refund, SLACK_BITS)?;
+    refund.enforce_equal(&expected_refund)
+}
+
+impl ConstraintSynthesizer<Fr> for LiquidationCircuit {
+    fn generate_constraints(self, cs: ConstraintSystemRef<Fr>) -> Result<(), SynthesisError> {
+        settlement_relation(
+            &cs,
+            SettlementKind::Liquidation,
+            &self.opening,
+            &self.statement,
+        )
+    }
+}
+
+impl ConstraintSynthesizer<Fr> for CloseCircuit {
+    fn generate_constraints(self, cs: ConstraintSystemRef<Fr>) -> Result<(), SynthesisError> {
+        settlement_relation(&cs, SettlementKind::Close, &self.opening, &self.statement)
     }
 }
 
@@ -381,16 +498,30 @@ mod tests {
     }
 
     #[test]
-    fn setup_shapes_are_satisfiable_shapes() {
+    fn setup_shapes_have_expected_instances_and_distinct_constraints() {
         let cs = ConstraintSystem::<Fr>::new_ref();
         OpenCircuit::setup_shape()
             .generate_constraints(cs.clone())
             .unwrap();
-        assert_eq!(cs.num_instance_variables(), 1 + 4);
+        assert_eq!(cs.num_instance_variables(), 1 + 7);
+        let open_constraints = cs.num_constraints();
+
         let cs = ConstraintSystem::<Fr>::new_ref();
         LiquidationCircuit::setup_shape()
             .generate_constraints(cs.clone())
             .unwrap();
         assert_eq!(cs.num_instance_variables(), 1 + 9);
+        let liq_constraints = cs.num_constraints();
+
+        let cs = ConstraintSystem::<Fr>::new_ref();
+        CloseCircuit::setup_shape()
+            .generate_constraints(cs.clone())
+            .unwrap();
+        assert_eq!(cs.num_instance_variables(), 1 + 9);
+        let close_constraints = cs.num_constraints();
+
+        // Close drops the deficiency decomposition: a distinct R1CS shape.
+        assert_eq!(liq_constraints, close_constraints + SLACK_BITS + 1);
+        assert_ne!(open_constraints, liq_constraints);
     }
 }

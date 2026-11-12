@@ -25,16 +25,17 @@ pub(crate) const G1_LEN: usize = 96;
 pub(crate) const G2_LEN: usize = 192;
 pub(crate) const SCALAR_LEN: usize = 32;
 pub(crate) const PROOF_LEN: usize = 2 * G1_LEN + G2_LEN;
-pub(crate) const OPEN_INPUTS: usize = 4;
+pub(crate) const OPEN_INPUTS: usize = 7;
+/// Shared by the liquidation and close statements (distinct keys).
 pub(crate) const LIQUIDATION_INPUTS: usize = 9;
 
 pub(crate) const fn vk_len(n_inputs: usize) -> usize {
     G1_LEN + 3 * G2_LEN + (n_inputs + 1) * G1_LEN
 }
 
-/// 1152 bytes.
+/// 1440 bytes.
 pub(crate) const OPEN_VK_LEN: usize = vk_len(OPEN_INPUTS);
-/// 1632 bytes.
+/// 1632 bytes; also the close key length.
 pub(crate) const LIQUIDATION_VK_LEN: usize = vk_len(LIQUIDATION_INPUTS);
 
 const COMPRESSION_FLAG: u8 = 0x80;
@@ -192,15 +193,24 @@ pub(crate) fn digest_scalars(d: &[u8; 32]) -> [[u8; 32]; 2] {
 }
 
 /// Contract-owned open statement:
-/// `[commitment_low128, commitment_high128, context_low128, context_high128]`.
-pub(crate) fn open_inputs(commitment: &[u8; 32], context: &[u8; 32]) -> [[u8; 32]; OPEN_INPUTS] {
+/// `[commitment_low128, commitment_high128, context_low128, context_high128,
+///   quote_terms_low128, quote_terms_high128, open_price_ticks]`.
+pub(crate) fn open_inputs(
+    commitment: &[u8; 32],
+    context: &[u8; 32],
+    quote_terms: &[u8; 32],
+    open_price_ticks: u32,
+) -> [[u8; 32]; OPEN_INPUTS] {
     let [c0, c1] = digest_scalars(commitment);
     let [x0, x1] = digest_scalars(context);
-    [c0, c1, x0, x1]
+    let [q0, q1] = digest_scalars(quote_terms);
+    [c0, c1, x0, x1, q0, q1, u64_scalar(open_price_ticks as u64)]
 }
 
-/// Contract-owned liquidation statement: open inputs followed by
-/// `[round, price_ticks, funding_cents, refund, bad_debt]`.
+/// Contract-owned liquidation and close statement:
+/// `[commitment_low128, commitment_high128, context_low128, context_high128,
+///   round, price_ticks, funding_delta_cents, refund, bad_debt]`.
+/// Both settlement modes use this encoder; only the verifying key differs.
 pub(crate) fn liquidation_inputs(
     commitment: &[u8; 32],
     context: &[u8; 32],
@@ -210,7 +220,8 @@ pub(crate) fn liquidation_inputs(
     refund: u64,
     bad_debt: u64,
 ) -> [[u8; 32]; LIQUIDATION_INPUTS] {
-    let [c0, c1, x0, x1] = open_inputs(commitment, context);
+    let [c0, c1] = digest_scalars(commitment);
+    let [x0, x1] = digest_scalars(context);
     [
         c0,
         c1,
@@ -231,8 +242,27 @@ mod tests {
     #[test]
     fn lengths() {
         assert_eq!(PROOF_LEN, 384);
-        assert_eq!(OPEN_VK_LEN, 1152);
+        assert_eq!(OPEN_VK_LEN, 1440);
         assert_eq!(LIQUIDATION_VK_LEN, 1632);
+    }
+
+    #[test]
+    fn statement_layouts() {
+        let cm: [u8; 32] = core::array::from_fn(|i| i as u8);
+        let ctx: [u8; 32] = core::array::from_fn(|i| 0x40 + i as u8);
+        let qt: [u8; 32] = core::array::from_fn(|i| 0x80 + i as u8);
+        let open = open_inputs(&cm, &ctx, &qt, 12_000);
+        assert_eq!(open[..2], digest_scalars(&cm));
+        assert_eq!(open[2..4], digest_scalars(&ctx));
+        assert_eq!(open[4..6], digest_scalars(&qt));
+        assert_eq!(open[6], u64_scalar(12_000));
+        assert_eq!(
+            open_inputs(&cm, &ctx, &qt, u32::MAX)[6],
+            u64_scalar(u32::MAX as u64)
+        );
+        let s = liquidation_inputs(&cm, &ctx, 3, 5_200, 200, 11_700, 0);
+        assert_eq!(s[..4], open[..4]);
+        assert_eq!(s[4..], [3u64, 5_200, 200, 11_700, 0].map(u64_scalar));
     }
 
     #[test]
@@ -253,7 +283,7 @@ mod tests {
         let inputs = [[0u8; 32]; OPEN_INPUTS];
         assert!(!verify(&vk[..OPEN_VK_LEN - 1], &proof, &inputs));
         assert!(!verify(&vk, &proof[..PROOF_LEN - 1], &inputs));
-        assert!(!verify(&vk, &proof, &inputs[..3]));
+        assert!(!verify(&vk, &proof, &inputs[..OPEN_INPUTS - 1]));
         assert!(!verify(&vk, &proof, &[]));
         assert!(!validate_vk(&vk[..10], OPEN_INPUTS));
     }

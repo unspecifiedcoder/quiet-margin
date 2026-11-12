@@ -13,34 +13,75 @@ use ark_groth16::{Groth16, ProvingKey};
 use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystem};
 use ark_snark::SNARK;
 
-use common::{fixture_opening, native_validate_vk, native_verify, oracle, verifier};
-use xythum_prover::api::{self, prove_liquidation_with, prove_open_with};
+use common::{
+    OPEN_PRICE, QUOTE_BLINDER, fixture_opening, native_validate_vk, native_verify, oracle, verifier,
+};
+use xythum_prover::api::{self, prove_close_with, prove_liquidation_with, prove_open_with};
 use xythum_prover::circuit::{
-    LiquidationCircuit, LiquidationStatement, OpenCircuit, OpenStatement,
+    CloseCircuit, LiquidationCircuit, LiquidationStatement, OpenCircuit, OpenStatement,
 };
 use xythum_prover::encoding::{self, scalars_to_fr, vk_bytes};
-use xythum_prover::model::{self, ModelError, Opening, Oracle, Settlement};
+use xythum_prover::model::{self, ModelError, Opening, Oracle, Settlement, SettlementKind};
 
 struct Keys {
     open: ProvingKey<Bls12_381>,
     liq: ProvingKey<Bls12_381>,
+    close: ProvingKey<Bls12_381>,
     open_vk: Vec<u8>,
     liq_vk: Vec<u8>,
+    close_vk: Vec<u8>,
 }
 
 fn keys() -> &'static Keys {
     static KEYS: OnceLock<Keys> = OnceLock::new();
     KEYS.get_or_init(|| {
-        let (open, liq) = api::generate_keys().unwrap();
-        let open_vk = vk_bytes(&open.vk);
-        let liq_vk = vk_bytes(&liq.vk);
+        let k = api::generate_keys().unwrap();
+        let open_vk = vk_bytes(&k.open.vk);
+        let liq_vk = vk_bytes(&k.liquidation.vk);
+        let close_vk = vk_bytes(&k.close.vk);
         Keys {
-            open,
-            liq,
+            open: k.open,
+            liq: k.liquidation,
+            close: k.close,
             open_vk,
             liq_vk,
+            close_vk,
         }
     })
+}
+
+fn honest_open(o: &Opening) -> OpenStatement {
+    OpenStatement::honest(o, &QUOTE_BLINDER, OPEN_PRICE)
+}
+
+fn open_inputs_of(st: &OpenStatement) -> [[u8; 32]; verifier::OPEN_INPUTS] {
+    verifier::open_inputs(
+        &st.commitment,
+        &st.context,
+        &st.quote_terms,
+        st.open_price_ticks,
+    )
+}
+
+fn close_satisfied(opening: &Opening, statement: LiquidationStatement) -> bool {
+    let cs = ConstraintSystem::<Fr>::new_ref();
+    CloseCircuit {
+        opening: *opening,
+        statement,
+    }
+    .generate_constraints(cs.clone())
+    .unwrap();
+    cs.is_satisfied().unwrap()
+}
+
+/// Close statement with the formula outputs for the given mode.
+fn kind_statement(kind: SettlementKind, o: &Opening, or: &Oracle) -> LiquidationStatement {
+    let (refund, bad_debt) = model::settlement_formula_for(kind, o, or);
+    LiquidationStatement {
+        refund: u64::try_from(refund).unwrap(),
+        bad_debt: u64::try_from(bad_debt).unwrap(),
+        ..formula_statement(o, or)
+    }
 }
 
 fn liq_satisfied(opening: &Opening, statement: LiquidationStatement) -> bool {
@@ -55,9 +96,18 @@ fn liq_satisfied(opening: &Opening, statement: LiquidationStatement) -> bool {
 }
 
 fn open_satisfied(opening: &Opening, statement: OpenStatement) -> bool {
+    open_satisfied_with(opening, &QUOTE_BLINDER, statement)
+}
+
+fn open_satisfied_with(
+    opening: &Opening,
+    quote_blinder: &[u8; 32],
+    statement: OpenStatement,
+) -> bool {
     let cs = ConstraintSystem::<Fr>::new_ref();
     OpenCircuit {
         opening: *opening,
+        quote_blinder: *quote_blinder,
         statement,
     }
     .generate_constraints(cs.clone())
@@ -93,10 +143,16 @@ fn ark_verify(pk: &ProvingKey<Bls12_381>, inputs: &[[u8; 32]], proof: &[u8]) -> 
 fn verifier_helpers_match_prover_encoding() {
     let o = fixture_opening();
     let cm = model::commitment(&o);
-    assert_eq!(
-        verifier::open_inputs(&cm, &o.context),
-        encoding::open_inputs(&cm, &o.context)
-    );
+    let qt = model::quote_terms(&o, &QUOTE_BLINDER);
+    for price in [1, OPEN_PRICE, 20_000, u32::MAX] {
+        assert_eq!(
+            verifier::open_inputs(&cm, &o.context, &qt, price),
+            encoding::open_inputs(&cm, &o.context, &qt, price)
+        );
+    }
+    assert_eq!(verifier::OPEN_INPUTS, encoding::OPEN_INPUTS);
+    assert_eq!(verifier::LIQUIDATION_INPUTS, encoding::LIQUIDATION_INPUTS);
+    assert_eq!(verifier::OPEN_VK_LEN, 1_440);
     assert_eq!(
         verifier::liquidation_inputs(&cm, &o.context, 7, 5_200, 200, 11_700, 0),
         encoding::liquidation_inputs(&cm, &o.context, 7, 5_200, 200, 11_700, 0)
@@ -113,13 +169,20 @@ fn generated_vks_are_well_formed() {
     assert_eq!(k.liq_vk.len(), verifier::LIQUIDATION_VK_LEN);
     assert!(native_validate_vk(&k.open_vk, verifier::OPEN_INPUTS));
     assert!(native_validate_vk(&k.liq_vk, verifier::LIQUIDATION_INPUTS));
+    assert_eq!(k.close_vk.len(), verifier::LIQUIDATION_VK_LEN);
+    assert!(native_validate_vk(
+        &k.close_vk,
+        verifier::LIQUIDATION_INPUTS
+    ));
     assert!(!native_validate_vk(
         &k.open_vk,
         verifier::LIQUIDATION_INPUTS
     ));
+    // Close and liquidation keys are independent.
+    assert_ne!(k.close_vk, k.liq_vk);
     // Every public input has a distinct, non-identity IC point, so each input
     // is bound (an unused input would have IC = 0 and be malleable).
-    for vk in [&k.open.vk, &k.liq.vk] {
+    for vk in [&k.open.vk, &k.liq.vk, &k.close.vk] {
         for (i, a) in vk.gamma_abc_g1.iter().enumerate() {
             assert!(!a.is_zero());
             for b in &vk.gamma_abc_g1[i + 1..] {
@@ -139,11 +202,14 @@ fn generated_vks_are_well_formed() {
 fn open_proof_verifies_natively() {
     let k = keys();
     let o = fixture_opening();
-    let out = prove_open_with(&k.open, &o).unwrap();
-    assert_eq!(out.commitment, model::commitment(&o));
-    let inputs = verifier::open_inputs(&out.commitment, &o.context);
-    assert!(ark_verify(&k.open, &inputs, &out.proof));
-    let (ok, gas) = native_verify(&k.open_vk, &out.proof, &inputs);
+    let out = prove_open_with(&k.open, &o, &QUOTE_BLINDER, OPEN_PRICE).unwrap();
+    assert_eq!(out.proof.commitment, model::commitment(&o));
+    assert_eq!(out.quote_terms, model::quote_terms(&o, &QUOTE_BLINDER));
+    let st = honest_open(&o);
+    let inputs = open_inputs_of(&st);
+    let proof = &out.proof.proof;
+    assert!(ark_verify(&k.open, &inputs, proof));
+    let (ok, gas) = native_verify(&k.open_vk, proof, &inputs);
     assert!(ok);
     eprintln!("open native verify gas: {gas}");
 
@@ -151,20 +217,137 @@ fn open_proof_verifies_natively() {
     for i in 0..inputs.len() {
         let mut m = inputs;
         m[i][0] ^= 1;
-        assert!(!native_verify(&k.open_vk, &out.proof, &m).0, "input {i}");
-        assert!(!ark_verify(&k.open, &m, &out.proof));
+        assert!(!native_verify(&k.open_vk, proof, &m).0, "input {i}");
+        assert!(!ark_verify(&k.open, &m, proof));
     }
-    // Another context (nonce 2) with the same commitment fails.
-    let other = verifier::open_inputs(&out.commitment, &common::fixture_context(2));
-    assert!(!native_verify(&k.open_vk, &out.proof, &other).0);
-    // The open proof does not verify under the liquidation key.
-    assert!(!native_verify(&k.liq_vk, &out.proof, &inputs).0);
+    // Another context (nonce 2, or a later funding checkpoint) fails.
+    for ctx in [
+        common::fixture_context(2),
+        common::fixture_context_at(1, common::CHECKPOINT + 1),
+    ] {
+        let other = verifier::open_inputs(&st.commitment, &ctx, &st.quote_terms, OPEN_PRICE);
+        assert!(!native_verify(&k.open_vk, proof, &other).0);
+    }
+    // A different opening mark fails, even one at which the position is healthy.
+    let moved = verifier::open_inputs(&st.commitment, &o.context, &st.quote_terms, 12_000);
+    assert!(!native_verify(&k.open_vk, proof, &moved).0);
+    // The quote digest under another quote blinder fails.
+    let other_qt = model::quote_terms(&o, &[0x3d; 32]);
+    let m = verifier::open_inputs(&st.commitment, &o.context, &other_qt, OPEN_PRICE);
+    assert!(!native_verify(&k.open_vk, proof, &m).0);
+    // The open proof does not verify under the settlement keys.
+    assert!(!native_verify(&k.liq_vk, proof, &inputs).0);
+    assert!(!native_verify(&k.close_vk, proof, &inputs).0);
+}
+
+#[test]
+fn open_rejects_bad_quote_terms() {
+    let o = fixture_opening();
+    let honest = honest_open(&o);
+    assert!(open_satisfied(&o, honest));
+
+    // Tampered digest bytes in each limb.
+    for byte in [0usize, 15, 16, 31] {
+        let mut st = honest;
+        st.quote_terms[byte] ^= 1;
+        assert!(!open_satisfied(&o, st), "byte {byte}");
+    }
+    // Wrong quote blinder witness against the honest digest.
+    assert!(!open_satisfied_with(&o, &[0x3d; 32], honest));
+    // A quote for different size or entry than the committed position, with
+    // the commitment still honest for the real opening.
+    for f in [
+        (|q: &mut Opening| q.lots = 9) as fn(&mut Opening),
+        |q| q.entry_ticks = 9_990,
+        |q| q.context = common::fixture_context(2),
+    ] {
+        let mut quoted = o;
+        f(&mut quoted);
+        let mut st = honest;
+        st.quote_terms = model::quote_terms(&quoted, &QUOTE_BLINDER);
+        assert!(!open_satisfied(&o, st));
+    }
+    // A commitment to different terms cannot reuse an honest quote either.
+    let mut other = o;
+    other.lots = 9;
+    let mut st = OpenStatement::honest(&other, &QUOTE_BLINDER, OPEN_PRICE);
+    st.quote_terms = honest.quote_terms;
+    assert!(!open_satisfied(&other, st));
+    // The quote omits margin and blinder: a different margin keeps the quote.
+    let mut m = o;
+    m.margin_cents = 40_000;
+    let st = OpenStatement::honest(&m, &QUOTE_BLINDER, OPEN_PRICE);
+    assert_eq!(st.quote_terms, honest.quote_terms);
+    assert!(open_satisfied(&m, st));
+}
+
+#[test]
+fn open_rejects_bad_mark() {
+    let k = keys();
+    let o = fixture_opening();
+    // 190 * p >= 1,000,000 for the fixture: 5,264 healthy, 5,263 not.
+    let at = |p| OpenStatement::honest(&o, &QUOTE_BLINDER, p);
+    assert!(open_satisfied(&o, at(5_264)));
+    assert!(open_satisfied(&o, at(12_000)));
+    assert!(open_satisfied(&o, at(20_000)));
+    assert!(!open_satisfied(&o, at(5_263)));
+    assert!(!open_satisfied(&o, at(1)));
+    assert!(!open_satisfied(&o, at(0)));
+    assert!(!open_satisfied(&o, at(20_001)));
+    assert!(!open_satisfied(&o, at(u32::MAX)));
+    assert!(matches!(
+        prove_open_with(&k.open, &o, &QUOTE_BLINDER, 5_263),
+        Err(api::Error::Model(ModelError::UnhealthyAtOpen))
+    ));
+    assert!(matches!(
+        prove_open_with(&k.open, &o, &QUOTE_BLINDER, 0),
+        Err(api::Error::Model(ModelError::OpenPriceOutOfRange))
+    ));
+
+    // Maintenance equality at the opening mark is healthy.
+    let mut eq = o;
+    eq.margin_cents = 49_992;
+    assert_eq!(model::check_open_at(&eq, 5_264), Ok(()));
+    assert!(open_satisfied(
+        &eq,
+        OpenStatement::honest(&eq, &QUOTE_BLINDER, 5_264)
+    ));
+    assert!(!open_satisfied(
+        &eq,
+        OpenStatement::honest(&eq, &QUOTE_BLINDER, 5_263)
+    ));
+    let out = prove_open_with(&k.open, &eq, &QUOTE_BLINDER, 5_264).unwrap();
+    let st = OpenStatement::honest(&eq, &QUOTE_BLINDER, 5_264);
+    assert!(native_verify(&k.open_vk, &out.proof.proof, &open_inputs_of(&st)).0);
+    let mut lower = st;
+    lower.open_price_ticks = 5_263;
+    assert!(!native_verify(&k.open_vk, &out.proof.proof, &open_inputs_of(&lower)).0);
+}
+
+#[cfg(not(debug_assertions))]
+#[test]
+fn forced_proof_of_unhealthy_open_fails_verification() {
+    let k = keys();
+    let o = fixture_opening();
+    let st = OpenStatement::honest(&o, &QUOTE_BLINDER, 5_263);
+    let proof = Groth16::<Bls12_381>::prove(
+        &k.open,
+        OpenCircuit {
+            opening: o,
+            quote_blinder: QUOTE_BLINDER,
+            statement: st,
+        },
+        &mut rand::rngs::OsRng,
+    )
+    .unwrap();
+    let bytes = encoding::proof_bytes(&proof);
+    assert!(!native_verify(&k.open_vk, &bytes, &st.inputs()).0);
 }
 
 #[test]
 fn open_relation_enforces_bounds() {
     let base = fixture_opening();
-    assert!(open_satisfied(&base, OpenStatement::honest(&base)));
+    assert!(open_satisfied(&base, honest_open(&base)));
     let cases: [(&str, fn(&mut Opening)); 7] = [
         ("lots 0", |o| o.lots = 0),
         ("lots 51", |o| o.lots = 51),
@@ -180,29 +363,32 @@ fn open_relation_enforces_bounds() {
         let mut o = base;
         f(&mut o);
         assert!(model::check_open(&o).is_err(), "{name}");
-        assert!(!open_satisfied(&o, OpenStatement::honest(&o)), "{name}");
+        assert!(!open_satisfied(&o, honest_open(&o)), "{name}");
     }
-    // Leverage equality is admitted.
+    // Leverage equality is admitted (each opened at its own entry mark).
     let mut o = base;
     o.margin_cents = 33_334; // 100000 <= 100002
-    assert!(open_satisfied(&o, OpenStatement::honest(&o)));
+    assert!(open_satisfied(&o, honest_open(&o)));
     let mut o = base;
     o.lots = 3;
     o.entry_ticks = 20_000;
     o.margin_cents = 20_000; // 60000 == 60000
-    assert!(open_satisfied(&o, OpenStatement::honest(&o)));
+    assert!(open_satisfied(
+        &o,
+        OpenStatement::honest(&o, &QUOTE_BLINDER, 20_000)
+    ));
 
     // Wrong commitment or context for a valid opening.
-    let mut st = OpenStatement::honest(&base);
+    let mut st = honest_open(&base);
     st.commitment[31] ^= 0x80;
     assert!(!open_satisfied(&base, st));
-    let mut st = OpenStatement::honest(&base);
+    let mut st = honest_open(&base);
     st.context[0] ^= 1;
     assert!(!open_satisfied(&base, st));
     // A different blinder does not open the same commitment.
     let mut o = base;
     o.blinder[5] ^= 1;
-    assert!(!open_satisfied(&o, OpenStatement::honest(&base)));
+    assert!(!open_satisfied(&o, honest_open(&base)));
 }
 
 // ---------------------------------------------------------------- liquidation
@@ -424,15 +610,174 @@ fn liquidation_relation_enforces_bounds_independently() {
     assert!(!liq_satisfied(&o, m));
 }
 
+// ---------------------------------------------------------------- close
+
+#[test]
+fn funded_close_verifies_natively() {
+    // Ten lots at $100,000, $500 margin, $2 funding delta, $120,000 mark.
+    let k = keys();
+    let o = fixture_opening();
+    let or = oracle(7, 12_000, 200);
+    assert_eq!(model::settle(&o, &or), Err(ModelError::Healthy));
+    let out = prove_close_with(&k.close, &o, &or).unwrap();
+    assert_eq!(
+        out.settlement,
+        Settlement {
+            refund: 79_800,
+            bad_debt: 0
+        }
+    );
+    assert_eq!(out.proof.commitment, model::commitment(&o));
+    let inputs =
+        verifier::liquidation_inputs(&out.proof.commitment, &o.context, 7, 12_000, 200, 79_800, 0);
+    let (ok, gas) = native_verify(&k.close_vk, &out.proof.proof, &inputs);
+    assert!(ok);
+    eprintln!("close native verify gas: {gas}");
+    assert!(ark_verify(&k.close, &inputs, &out.proof.proof));
+    for i in 0..inputs.len() {
+        let mut m = inputs;
+        m[i][0] ^= 1;
+        assert!(
+            !native_verify(&k.close_vk, &out.proof.proof, &m).0,
+            "input {i}"
+        );
+    }
+    // A healthy close never verifies as a liquidation.
+    assert!(!native_verify(&k.liq_vk, &out.proof.proof, &inputs).0);
+    // The liquidation key refuses to prove it at all.
+    assert!(matches!(
+        prove_liquidation_with(&k.liq, &o, &or),
+        Err(api::Error::Model(ModelError::Healthy))
+    ));
+}
+
+#[test]
+fn close_and_liquidation_keys_are_separate() {
+    // Distressed slot at $52,000: both modes can prove the same round.
+    let k = keys();
+    let o = fixture_opening();
+    let or = oracle(9, 5_200, 200);
+    let close = prove_close_with(&k.close, &o, &or).unwrap();
+    let liq = prove_liquidation_with(&k.liq, &o, &or).unwrap();
+    assert_eq!(close.settlement.refund, 11_800);
+    assert_eq!(liq.settlement.refund, 11_700);
+    assert_eq!(close.settlement.bad_debt, liq.settlement.bad_debt);
+
+    let cm = model::commitment(&o);
+    let st = |refund| verifier::liquidation_inputs(&cm, &o.context, 9, 5_200, 200, refund, 0);
+    assert!(native_verify(&k.close_vk, &close.proof.proof, &st(11_800)).0);
+    assert!(native_verify(&k.liq_vk, &liq.proof.proof, &st(11_700)).0);
+    // Neither proof crosses keys, with either mode's statement.
+    for refund in [11_700, 11_800] {
+        assert!(!native_verify(&k.liq_vk, &close.proof.proof, &st(refund)).0);
+        assert!(!native_verify(&k.close_vk, &liq.proof.proof, &st(refund)).0);
+    }
+    // Each relation rejects the other mode's refund.
+    let close_st = LiquidationStatement::honest(&o, &or, &close.settlement);
+    let liq_st = LiquidationStatement::honest(&o, &or, &liq.settlement);
+    assert!(close_satisfied(&o, close_st));
+    assert!(!close_satisfied(&o, liq_st));
+    assert!(liq_satisfied(&o, liq_st));
+    assert!(!liq_satisfied(&o, close_st));
+}
+
+#[test]
+fn close_refund_is_exact_regardless_of_health() {
+    let o = fixture_opening();
+    for or in [
+        oracle(1, 12_000, 200), // funded profit
+        oracle(1, 20_000, 0),   // pnl 100,000 capped at 60,000
+        oracle(1, 10_000, 0),   // flat
+        oracle(1, 7_000, 200),  // healthy loss
+        oracle(1, 5_300, 200),  // just above maintenance
+        oracle(1, 5_200, 200),  // distressed
+        oracle(1, 5_023, 200),  // equity 30, below the liquidation bounty
+        oracle(1, 100, 200),    // bad debt
+    ] {
+        let s = model::close(&o, &or).unwrap();
+        let st = LiquidationStatement::honest(&o, &or, &s);
+        assert!(close_satisfied(&o, st), "{or:?}");
+        for d in [-1i64, 1, 100, -100] {
+            let mut m = st;
+            m.refund = (s.refund as i64 + d) as u64;
+            assert!(!close_satisfied(&o, m), "{or:?} {d}");
+        }
+        let mut m = st;
+        m.bad_debt += 1;
+        assert!(!close_satisfied(&o, m), "{or:?}");
+        // Close and liquidation formulas agree exactly except for the bounty.
+        let (lr, lb) = model::settlement_formula(&o, &or);
+        assert_eq!(lb as u64, s.bad_debt);
+        let capped = model::equity(&o, &or) - (model::pnl(&o, or.price_ticks) - 60_000).max(0);
+        assert_eq!(s.refund as i128 - lr, capped.max(0) - (capped - 100).max(0));
+    }
+    // Pnl cap: 10000 + (50000 + 60000) = 120,000.
+    assert_eq!(
+        model::close(&o, &oracle(1, 20_000, 0)).unwrap().refund,
+        120_000
+    );
+    // Below-bounty equity is refunded in full on close.
+    assert_eq!(
+        model::close(&o, &oracle(1, 5_023, 200)).unwrap().refund,
+        10_030
+    );
+}
+
+#[test]
+fn close_relation_enforces_bounds_independently() {
+    let o = fixture_opening();
+    let or = oracle(1, 12_000, 200);
+    let honest = kind_statement(SettlementKind::Close, &o, &or);
+    assert!(close_satisfied(&o, honest));
+
+    // Funding delta above 200.
+    assert!(!close_satisfied(
+        &o,
+        kind_statement(SettlementKind::Close, &o, &oracle(1, 12_000, 201))
+    ));
+    // Round zero; price zero, above range, and beyond u32.
+    let mut m = honest;
+    m.round = 0;
+    assert!(!close_satisfied(&o, m));
+    for price in [0u32, 20_001] {
+        assert!(!close_satisfied(
+            &o,
+            kind_statement(SettlementKind::Close, &o, &oracle(1, price, 200))
+        ));
+    }
+    let mut m = honest;
+    m.price_ticks = 1 << 32;
+    assert!(!close_satisfied(&o, m));
+    // Out-of-range opening.
+    let mut bad = o;
+    bad.margin_cents = 33_333;
+    assert!(!close_satisfied(
+        &bad,
+        kind_statement(SettlementKind::Close, &bad, &or)
+    ));
+    // Wrong commitment and wrong context (other nonce or funding checkpoint).
+    let mut m = honest;
+    m.commitment[0] ^= 1;
+    assert!(!close_satisfied(&o, m));
+    for ctx in [
+        common::fixture_context(2),
+        common::fixture_context_at(1, common::CHECKPOINT + 1),
+    ] {
+        let mut m = honest;
+        m.context = ctx;
+        assert!(!close_satisfied(&o, m));
+    }
+}
+
 // ---------------------------------------------------------------- malformed
 
 #[test]
 fn malformed_and_mutated_proofs_fail_closed() {
     let k = keys();
     let o = fixture_opening();
-    let out = prove_open_with(&k.open, &o).unwrap();
-    let inputs = verifier::open_inputs(&out.commitment, &o.context);
-    let p = &out.proof;
+    let out = prove_open_with(&k.open, &o, &QUOTE_BLINDER, OPEN_PRICE).unwrap();
+    let inputs = open_inputs_of(&honest_open(&o));
+    let p = &out.proof.proof;
     assert!(native_verify(&k.open_vk, p, &inputs).0);
 
     // Byte flips inside A, B, and C coordinates.
@@ -477,14 +822,14 @@ fn malformed_and_mutated_proofs_fail_closed() {
     let mut longer = p.clone();
     longer.push(0);
     assert!(!native_verify(&k.open_vk, &longer, &inputs).0);
-    assert!(!native_verify(&k.open_vk[..1151], p, &inputs).0);
-    assert!(!native_verify(&k.open_vk, p, &inputs[..3]).0);
+    assert!(!native_verify(&k.open_vk[..verifier::OPEN_VK_LEN - 1], p, &inputs).0);
+    assert!(!native_verify(&k.open_vk, p, &inputs[..verifier::OPEN_INPUTS - 1]).0);
     // Mutated VK.
     let mut vk = k.open_vk.clone();
     vk[96 + 192 + 50] ^= 1; // gamma
     assert!(!native_verify(&vk, p, &inputs).0);
     let mut vk = k.open_vk.clone();
-    vk[1152 - 1] ^= 1; // last IC
+    vk[verifier::OPEN_VK_LEN - 1] ^= 1; // last IC
     assert!(!native_verify(&vk, p, &inputs).0);
 
     // Non-canonical scalar: x + r is rejected even though x + r == x mod r.

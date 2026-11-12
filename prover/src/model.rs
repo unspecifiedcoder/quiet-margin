@@ -1,9 +1,12 @@
-//! Pure Rust reference model for the v1 BTC/mock-USDC long market.
+//! Pure Rust reference model for the v2 funded BTC/mock-USDC long market.
 //!
 //! This module is the arithmetic oracle shared by the circuit tests, the CLI,
-//! and the contract fixtures. It follows `docs/SPEC.md` ("Position and reference
-//! arithmetic" and "Commitment, proofs, and encodings") exactly. All arithmetic
-//! is done in `i128` so no intermediate value can overflow.
+//! and the contract fixtures. It follows `docs/FUNDED-MARKET.md` and, where
+//! that document defers, `docs/SPEC.md`. All arithmetic is done in `i128` so
+//! no intermediate value can overflow.
+//!
+//! `Oracle::funding_cents` is always the authenticated funding index delta
+//! `current_funding_index - funding_checkpoint`, never the raw index.
 
 use sha2::{Digest, Sha256};
 
@@ -20,9 +23,9 @@ pub const MAX_LEVERAGE: u32 = 3;
 pub const ESCROW_CENTS: u32 = 60_000;
 /// Positive PnL cap used in settlement (cents).
 pub const PNL_CAP_CENTS: u32 = 60_000;
-/// Liquidation bounty paid to the submitting keeper (cents).
+/// Liquidation bounty paid to the submitting keeper (cents). Close pays none.
 pub const BOUNTY_CENTS: u32 = 100;
-/// Maximum cumulative funding debit (cents), inclusive.
+/// Maximum funding delta since the opening checkpoint (cents), inclusive.
 pub const MAX_FUNDING_CENTS: u32 = 200;
 /// Maintenance is `price * lots / MAINTENANCE_DIVISOR` (5%).
 pub const MAINTENANCE_DIVISOR: u32 = 20;
@@ -33,8 +36,26 @@ pub const MIN_ROUND: u64 = 1;
 pub const MIN_PRICE_TICKS: u32 = 1;
 pub const MAX_PRICE_TICKS: u32 = MAX_ENTRY_TICKS as u32;
 
-pub const MARKET_PREFIX: &[u8] = b"xythum:BTC-USDC:v1:";
-pub const CONTEXT_PREFIX: &[u8] = b"xythum:position:v1:";
+pub const MARKET_PREFIX: &[u8] = b"xythum:BTC-USDC:v2:";
+pub const CONTEXT_PREFIX: &[u8] = b"xythum:position:v2:";
+pub const QUOTE_PREFIX: &[u8] = b"xythum:quote:v2:";
+
+/// Settlement mode. Both share one formula; only liquidation requires a
+/// strictly deficient position and pays the keeper bounty.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SettlementKind {
+    Liquidation,
+    Close,
+}
+
+impl SettlementKind {
+    pub const fn bounty_cents(self) -> u32 {
+        match self {
+            SettlementKind::Liquidation => BOUNTY_CENTS,
+            SettlementKind::Close => 0,
+        }
+    }
+}
 
 /// The private opening of a position commitment.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -53,7 +74,8 @@ impl core::fmt::Debug for Opening {
     }
 }
 
-/// Public oracle values bound by the liquidation statement.
+/// Public oracle values bound by the settlement statements. `funding_cents`
+/// is the index delta since the position's funding checkpoint.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Oracle {
     pub round: u64,
@@ -79,6 +101,9 @@ pub enum ModelError {
     FundingOutOfRange,
     /// `20 * equity >= price * lots`; equality is healthy.
     Healthy,
+    OpenPriceOutOfRange,
+    /// `20 * (margin + pnl) < open_price * lots` at the opening mark.
+    UnhealthyAtOpen,
 }
 
 impl core::fmt::Display for ModelError {
@@ -95,6 +120,10 @@ impl core::fmt::Display for ModelError {
                 "position is healthy at this oracle round (equity is at least 5% \
                  maintenance); liquidation cannot be proven"
             }
+            ModelError::OpenPriceOutOfRange => "open_price_ticks must be in 1..=20000",
+            ModelError::UnhealthyAtOpen => {
+                "position is below 5% maintenance at the opening mark; open cannot be proven"
+            }
         };
         f.write_str(msg)
     }
@@ -110,17 +139,26 @@ pub fn sha256(parts: &[&[u8]]) -> [u8; 32] {
     h.finalize().into()
 }
 
-/// `SHA256("xythum:BTC-USDC:v1:" || deployment_id[32] || contract_account_utf8)`
+/// `SHA256("xythum:BTC-USDC:v2:" || deployment_id[32] || contract_account_utf8)`
 pub fn market(deployment_id: &[u8; 32], contract_account: &str) -> [u8; 32] {
     sha256(&[MARKET_PREFIX, deployment_id, contract_account.as_bytes()])
 }
 
-/// `SHA256("xythum:position:v1:" || market[32] || nonce_u32 || trader_account_utf8)`
-pub fn context(market: &[u8; 32], nonce: u32, trader_account: &str) -> [u8; 32] {
+/// `SHA256("xythum:position:v2:" || market[32] || nonce_u32 || funding_checkpoint_u32 || trader_account_utf8)`
+///
+/// The circuits never recompute the context; the caller (the contract)
+/// derives it and supplies it as a public input.
+pub fn context(
+    market: &[u8; 32],
+    nonce: u32,
+    funding_checkpoint: u32,
+    trader_account: &str,
+) -> [u8; 32] {
     sha256(&[
         CONTEXT_PREFIX,
         market,
         &nonce.to_le_bytes(),
+        &funding_checkpoint.to_le_bytes(),
         trader_account.as_bytes(),
     ])
 }
@@ -141,7 +179,24 @@ pub fn commitment(o: &Opening) -> [u8; 32] {
     sha256(&[&commitment_preimage(o)])
 }
 
-/// Entry and risk bounds enforced by both statements.
+/// The quote preimage
+/// `"xythum:quote:v2:" || context[32] || quote_blinder[32] || lots_u16 || entry_u16`.
+pub fn quote_terms_preimage(o: &Opening, quote_blinder: &[u8; 32]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(QUOTE_PREFIX.len() + 68);
+    out.extend_from_slice(QUOTE_PREFIX);
+    out.extend_from_slice(&o.context);
+    out.extend_from_slice(quote_blinder);
+    out.extend_from_slice(&o.lots.to_le_bytes());
+    out.extend_from_slice(&o.entry_ticks.to_le_bytes());
+    out
+}
+
+/// Salted digest of the maker-visible quote terms (size and entry).
+pub fn quote_terms(o: &Opening, quote_blinder: &[u8; 32]) -> [u8; 32] {
+    sha256(&[&quote_terms_preimage(o, quote_blinder)])
+}
+
+/// Entry and risk bounds enforced by every statement.
 pub fn check_open(o: &Opening) -> Result<(), ModelError> {
     if !(MIN_LOTS..=MAX_LOTS).contains(&o.lots) {
         return Err(ModelError::LotsOutOfRange);
@@ -155,6 +210,25 @@ pub fn check_open(o: &Opening) -> Result<(), ModelError> {
     let notional = o.entry_ticks as u64 * o.lots as u64;
     if notional > MAX_LEVERAGE as u64 * o.margin_cents as u64 {
         return Err(ModelError::LeverageExceeded);
+    }
+    Ok(())
+}
+
+/// `20 * (margin + (open_price - entry) * lots) >= open_price * lots`
+pub fn is_healthy_at_open(o: &Opening, open_price_ticks: u32) -> bool {
+    let eq = o.margin_cents as i128 + pnl(o, open_price_ticks);
+    MAINTENANCE_DIVISOR as i128 * eq >= open_price_ticks as i128 * o.lots as i128
+}
+
+/// Full open statement checks: bounds, leverage, mark range, and health at
+/// the authenticated opening mark.
+pub fn check_open_at(o: &Opening, open_price_ticks: u32) -> Result<(), ModelError> {
+    check_open(o)?;
+    if !(MIN_PRICE_TICKS..=MAX_PRICE_TICKS).contains(&open_price_ticks) {
+        return Err(ModelError::OpenPriceOutOfRange);
+    }
+    if !is_healthy_at_open(o, open_price_ticks) {
+        return Err(ModelError::UnhealthyAtOpen);
     }
     Ok(())
 }
@@ -189,24 +263,42 @@ pub fn is_liquidatable(o: &Opening, oracle: &Oracle) -> bool {
 
 /// Settlement formulas evaluated without the health or bounds checks.
 /// Used by tests that need the "would-be" outputs of a healthy position.
-pub fn settlement_formula(o: &Opening, oracle: &Oracle) -> (i128, i128) {
+pub fn settlement_formula_for(kind: SettlementKind, o: &Opening, oracle: &Oracle) -> (i128, i128) {
     let eq = equity(o, oracle);
     let capped = o.margin_cents as i128 - oracle.funding_cents as i128
         + pnl(o, oracle.price_ticks).min(PNL_CAP_CENTS as i128);
-    let refund =
-        ESCROW_CENTS as i128 - o.margin_cents as i128 + (capped - BOUNTY_CENTS as i128).max(0);
+    let refund = ESCROW_CENTS as i128 - o.margin_cents as i128
+        + (capped - kind.bounty_cents() as i128).max(0);
     let bad_debt = (-eq).max(0);
     (refund, bad_debt)
 }
 
+/// Liquidation formula outputs (bounty 100), ignoring health.
+pub fn settlement_formula(o: &Opening, oracle: &Oracle) -> (i128, i128) {
+    settlement_formula_for(SettlementKind::Liquidation, o, oracle)
+}
+
 /// Exact liquidation outputs; refuses healthy positions.
 pub fn settle(o: &Opening, oracle: &Oracle) -> Result<Settlement, ModelError> {
+    settle_as(SettlementKind::Liquidation, o, oracle)
+}
+
+/// Exact voluntary close outputs: no bounty and no health requirement.
+pub fn close(o: &Opening, oracle: &Oracle) -> Result<Settlement, ModelError> {
+    settle_as(SettlementKind::Close, o, oracle)
+}
+
+pub fn settle_as(
+    kind: SettlementKind,
+    o: &Opening,
+    oracle: &Oracle,
+) -> Result<Settlement, ModelError> {
     check_open(o)?;
     check_oracle(oracle)?;
-    if !is_liquidatable(o, oracle) {
+    if kind == SettlementKind::Liquidation && !is_liquidatable(o, oracle) {
         return Err(ModelError::Healthy);
     }
-    let (refund, bad_debt) = settlement_formula(o, oracle);
+    let (refund, bad_debt) = settlement_formula_for(kind, o, oracle);
     // Bounds keep both values small and nonnegative.
     Ok(Settlement {
         refund: u64::try_from(refund).expect("refund is nonnegative and bounded"),
@@ -214,10 +306,10 @@ pub fn settle(o: &Opening, oracle: &Oracle) -> Result<Settlement, ModelError> {
     })
 }
 
-/// `vault_after = vault_before + 60000 - refund - 100` (may be negative for
+/// `vault_after = vault_before + 60000 - refund - bounty` (may be negative for
 /// callers to reject; returned as i128).
-pub fn vault_after(vault_before: u64, s: &Settlement) -> i128 {
-    vault_before as i128 + ESCROW_CENTS as i128 - s.refund as i128 - BOUNTY_CENTS as i128
+pub fn vault_after(kind: SettlementKind, vault_before: u64, s: &Settlement) -> i128 {
+    vault_before as i128 + ESCROW_CENTS as i128 - s.refund as i128 - kind.bounty_cents() as i128
 }
 
 #[cfg(test)]
@@ -263,7 +355,7 @@ mod tests {
             }
         );
         // Maker gains 48,200.
-        assert_eq!(vault_after(0, &s), 48_200);
+        assert_eq!(vault_after(SettlementKind::Liquidation, 0, &s), 48_200);
     }
 
     #[test]
@@ -295,7 +387,102 @@ mod tests {
                 bad_debt: 49_200
             }
         );
-        assert_eq!(vault_after(0, &s), 49_900);
+        assert_eq!(vault_after(SettlementKind::Liquidation, 0, &s), 49_900);
+        // Close at the same gap: no bounty, same bad debt, same vault delta
+        // because max(capped - bounty, 0) is zero either way.
+        let c = close(&o, &oracle(100, 200)).unwrap();
+        assert_eq!(c, s);
+        assert_eq!(vault_after(SettlementKind::Close, 0, &c), 50_000);
+    }
+
+    #[test]
+    fn funded_close_at_120000_refunds_798() {
+        // Ten lots at $100,000, $500 margin, $2 funding, $120,000 mark.
+        let o = fixture(50_000);
+        let or = oracle(12_000, 200);
+        assert_eq!(settle(&o, &or), Err(ModelError::Healthy));
+        let s = close(&o, &or).unwrap();
+        assert_eq!(
+            s,
+            Settlement {
+                refund: 79_800,
+                bad_debt: 0
+            }
+        );
+        // Maker loses $198 of funded collateral.
+        assert_eq!(vault_after(SettlementKind::Close, 0, &s), -19_800);
+    }
+
+    #[test]
+    fn close_and_liquidation_race_reconcile() {
+        // Distressed slot at $52,000: close pays 118, liquidation 117 + 1.
+        let o = fixture(50_000);
+        let or = oracle(5_200, 200);
+        let c = close(&o, &or).unwrap();
+        let l = settle(&o, &or).unwrap();
+        assert_eq!(c.refund, 11_800);
+        assert_eq!(l.refund, 11_700);
+        assert_eq!(c.bad_debt, l.bad_debt);
+        assert_eq!(
+            vault_after(SettlementKind::Close, 0, &c),
+            vault_after(SettlementKind::Liquidation, 0, &l)
+        );
+        assert_eq!(vault_after(SettlementKind::Close, 0, &c), 48_200);
+    }
+
+    #[test]
+    fn open_health_at_mark() {
+        let o = fixture(50_000);
+        // 190 * p >= 1,000,000 -> p >= 5264.
+        assert_eq!(check_open_at(&o, 10_000), Ok(()));
+        assert_eq!(check_open_at(&o, 12_000), Ok(()));
+        assert_eq!(check_open_at(&o, 5_264), Ok(()));
+        assert_eq!(check_open_at(&o, 5_263), Err(ModelError::UnhealthyAtOpen));
+        assert_eq!(check_open_at(&o, 0), Err(ModelError::OpenPriceOutOfRange));
+        assert_eq!(
+            check_open_at(&o, 20_001),
+            Err(ModelError::OpenPriceOutOfRange)
+        );
+        // Equality is healthy: 20 * (49992 + (5264 - 10000) * 10) == 52640.
+        let eq = fixture(49_992);
+        assert_eq!(20 * (49_992 + pnl(&eq, 5_264)), 5_264 * eq.lots as i128);
+        assert_eq!(check_open_at(&eq, 5_264), Ok(()));
+        assert_eq!(check_open_at(&eq, 5_263), Err(ModelError::UnhealthyAtOpen));
+    }
+
+    #[test]
+    fn quote_and_context_layouts() {
+        let o = fixture(50_000);
+        let qb = [3u8; 32];
+        let pre = quote_terms_preimage(&o, &qb);
+        assert_eq!(pre.len(), 16 + 68);
+        assert_eq!(&pre[..16], b"xythum:quote:v2:");
+        assert_eq!(&pre[16..48], &o.context);
+        assert_eq!(&pre[48..80], &qb);
+        assert_eq!(&pre[80..82], &10u16.to_le_bytes());
+        assert_eq!(&pre[82..84], &10_000u16.to_le_bytes());
+        assert_eq!(quote_terms(&o, &qb), sha256(&[&pre]));
+        // Margin and position blinder do not enter the quote digest.
+        let mut m = o;
+        m.margin_cents = 40_000;
+        m.blinder = [0; 32];
+        assert_eq!(quote_terms(&m, &qb), quote_terms(&o, &qb));
+
+        let mk = market(&[1; 32], "perps.test.near");
+        assert_eq!(
+            context(&mk, 7, 300, "t.near"),
+            sha256(&[
+                b"xythum:position:v2:",
+                &mk,
+                &7u32.to_le_bytes(),
+                &300u32.to_le_bytes(),
+                b"t.near"
+            ])
+        );
+        assert_ne!(
+            context(&mk, 7, 300, "t.near"),
+            context(&mk, 7, 301, "t.near")
+        );
     }
 
     #[test]

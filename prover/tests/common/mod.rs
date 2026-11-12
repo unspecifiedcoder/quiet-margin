@@ -13,9 +13,20 @@ pub const DEPLOYMENT_ID: [u8; 32] = [0x11; 32];
 pub const CONTRACT: &str = "perps.test.near";
 pub const TRADER: &str = "trader.test.near";
 
-pub fn fixture_context(nonce: u32) -> [u8; 32] {
+/// Funding checkpoint of the fixture position.
+pub const CHECKPOINT: u32 = 0;
+/// Fixture quote blinder.
+pub const QUOTE_BLINDER: [u8; 32] = [0x3c; 32];
+/// Fixture opening mark ($100,000).
+pub const OPEN_PRICE: u32 = 10_000;
+
+pub fn fixture_context_at(nonce: u32, funding_checkpoint: u32) -> [u8; 32] {
     let market = model::market(&DEPLOYMENT_ID, CONTRACT);
-    model::context(&market, nonce, TRADER)
+    model::context(&market, nonce, funding_checkpoint, TRADER)
+}
+
+pub fn fixture_context(nonce: u32) -> [u8; 32] {
+    fixture_context_at(nonce, CHECKPOINT)
 }
 
 /// Spec fixture: 10 lots at 10,000 ticks with 50,000 cents margin.

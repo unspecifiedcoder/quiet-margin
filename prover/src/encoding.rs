@@ -24,7 +24,8 @@ pub const G1_LEN: usize = 96;
 pub const G2_LEN: usize = 192;
 pub const SCALAR_LEN: usize = 32;
 pub const PROOF_LEN: usize = 2 * G1_LEN + G2_LEN;
-pub const OPEN_INPUTS: usize = 4;
+pub const OPEN_INPUTS: usize = 7;
+/// Shared by the liquidation and close statements (distinct keys).
 pub const LIQUIDATION_INPUTS: usize = 9;
 
 pub const fn vk_len(n_inputs: usize) -> usize {
@@ -115,14 +116,23 @@ pub fn digest_scalars(d: &[u8; 32]) -> [[u8; SCALAR_LEN]; 2] {
     [lo, hi]
 }
 
-/// `[commitment_low128, commitment_high128, context_low128, context_high128]`
-pub fn open_inputs(commitment: &[u8; 32], context: &[u8; 32]) -> [[u8; SCALAR_LEN]; OPEN_INPUTS] {
+/// `[commitment_low128, commitment_high128, context_low128, context_high128,
+///   quote_terms_low128, quote_terms_high128, open_price_ticks]`
+pub fn open_inputs(
+    commitment: &[u8; 32],
+    context: &[u8; 32],
+    quote_terms: &[u8; 32],
+    open_price_ticks: u32,
+) -> [[u8; SCALAR_LEN]; OPEN_INPUTS] {
     let [c0, c1] = digest_scalars(commitment);
     let [x0, x1] = digest_scalars(context);
-    [c0, c1, x0, x1]
+    let [q0, q1] = digest_scalars(quote_terms);
+    [c0, c1, x0, x1, q0, q1, u64_scalar(open_price_ticks as u64)]
 }
 
-/// Open inputs followed by `[round, price_ticks, funding_cents, refund, bad_debt]`.
+/// Liquidation and close statement:
+/// `[commitment_low128, commitment_high128, context_low128, context_high128,
+///   round, price_ticks, funding_delta_cents, refund, bad_debt]`.
 pub fn liquidation_inputs(
     commitment: &[u8; 32],
     context: &[u8; 32],
@@ -132,7 +142,8 @@ pub fn liquidation_inputs(
     refund: u64,
     bad_debt: u64,
 ) -> [[u8; SCALAR_LEN]; LIQUIDATION_INPUTS] {
-    let [c0, c1, x0, x1] = open_inputs(commitment, context);
+    let [c0, c1] = digest_scalars(commitment);
+    let [x0, x1] = digest_scalars(context);
     [
         c0,
         c1,
@@ -206,7 +217,7 @@ mod tests {
     #[test]
     fn lengths() {
         assert_eq!(PROOF_LEN, 384);
-        assert_eq!(OPEN_VK_LEN, 1152);
+        assert_eq!(OPEN_VK_LEN, 1440);
         assert_eq!(LIQUIDATION_VK_LEN, 1632);
     }
 }

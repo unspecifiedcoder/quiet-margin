@@ -11,7 +11,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use serde_json::{Value, json};
 
-use common::{fixture_opening, native_verify, verifier};
+use common::{OPEN_PRICE, QUOTE_BLINDER, fixture_opening, native_verify, verifier};
 use xythum_prover::model;
 
 fn bin() -> Command {
@@ -85,6 +85,25 @@ fn input(round: Option<u64>, price: Option<u32>, funding: Option<u32>) -> String
     v.to_string()
 }
 
+/// Opening input plus the quote blinder and opening mark.
+fn open_input(open_price: Option<u32>) -> String {
+    let mut v: Value = serde_json::from_str(&input(None, None, None)).unwrap();
+    v["quote_blinder"] = json!(STANDARD.encode(QUOTE_BLINDER));
+    if let Some(p) = open_price {
+        v["open_price_ticks"] = json!(p);
+    }
+    v.to_string()
+}
+
+const KEY_FILES: [&str; 6] = [
+    "open.pk",
+    "liquidation.pk",
+    "close.pk",
+    "open.vk",
+    "liquidation.vk",
+    "close.vk",
+];
+
 #[test]
 fn cli_end_to_end() {
     let dir = fresh_dir("e2e");
@@ -92,39 +111,104 @@ fn cli_end_to_end() {
 
     // setup
     let setup = ok_json(&run(&["setup", d], None));
+    assert_eq!(setup.as_object().unwrap().len(), 6);
     let open_vk = b64(&setup["open_vk"]);
     let liq_vk = b64(&setup["liquidation_vk"]);
+    let close_vk = b64(&setup["close_vk"]);
     assert_eq!(open_vk.len(), verifier::OPEN_VK_LEN);
     assert_eq!(liq_vk.len(), verifier::LIQUIDATION_VK_LEN);
+    assert_eq!(close_vk.len(), verifier::LIQUIDATION_VK_LEN);
+    assert_ne!(close_vk, liq_vk);
     assert_eq!(b64(&setup["open_vk_sha256"]), model::sha256(&[&open_vk]));
     assert_eq!(
         b64(&setup["liquidation_vk_sha256"]),
         model::sha256(&[&liq_vk])
     );
-    for f in ["open.pk", "liquidation.pk", "open.vk", "liquidation.vk"] {
+    assert_eq!(b64(&setup["close_vk_sha256"]), model::sha256(&[&close_vk]));
+    for f in KEY_FILES {
         assert!(dir.join(f).is_file(), "{f}");
     }
     assert_eq!(std::fs::read(dir.join("open.vk")).unwrap(), open_vk);
+    assert_eq!(std::fs::read(dir.join("close.vk")).unwrap(), close_vk);
+    let pk_before = std::fs::read(dir.join("close.pk")).unwrap();
 
     // setup refuses to overwrite keys
     let again = run(&["setup", d], None);
     assert!(!again.status.success());
     assert!(String::from_utf8_lossy(&again.stderr).contains("already exists"));
+    assert_eq!(std::fs::read(dir.join("close.pk")).unwrap(), pk_before);
 
-    // commit
+    // keys: re-exports the identical public output, writes nothing
+    let exported = ok_json(&run(&["keys", d], None));
+    assert_eq!(exported, setup);
+    assert_eq!(std::fs::read(dir.join("close.pk")).unwrap(), pk_before);
+
+    // commit (v1 shape without a quote blinder, plus quote_terms with one)
     let o = fixture_opening();
     let commit = ok_json(&run(&["commit"], Some(&input(None, None, None))));
     let cm: [u8; 32] = b64(&commit["commitment"]).try_into().unwrap();
     assert_eq!(cm, model::commitment(&o));
     assert_eq!(commit.as_object().unwrap().len(), 1);
+    let qt_expected = model::quote_terms(&o, &QUOTE_BLINDER);
+    let commit = ok_json(&run(&["commit"], Some(&open_input(None))));
+    assert_eq!(b64(&commit["commitment"]), cm);
+    assert_eq!(b64(&commit["quote_terms"]), qt_expected);
+
+    // prove-open requires the quote blinder and the opening mark
+    for bad in [input(None, None, None), open_input(None)] {
+        let out = run(&["prove-open", d], Some(&bad));
+        assert!(!out.status.success());
+        assert!(out.stdout.is_empty());
+        assert!(String::from_utf8_lossy(&out.stderr).contains("quote_blinder"));
+    }
 
     // prove-open
-    let open = ok_json(&run(&["prove-open", d], Some(&input(None, None, None))));
+    let open = ok_json(&run(
+        &["prove-open", d],
+        Some(&open_input(Some(OPEN_PRICE))),
+    ));
+    assert_eq!(open.as_object().unwrap().len(), 4);
     assert_eq!(b64(&open["commitment"]), cm);
+    let qt: [u8; 32] = b64(&open["quote_terms"]).try_into().unwrap();
+    assert_eq!(qt, qt_expected);
     assert!(open["proving_ms"].is_u64());
     let proof = b64(&open["proof"]);
     assert_eq!(proof.len(), verifier::PROOF_LEN);
-    assert!(native_verify(&open_vk, &proof, &verifier::open_inputs(&cm, &o.context)).0);
+    let open_st = |p| verifier::open_inputs(&cm, &o.context, &qt, p);
+    assert!(native_verify(&open_vk, &proof, &open_st(OPEN_PRICE)).0);
+    assert!(!native_verify(&open_vk, &proof, &open_st(OPEN_PRICE + 1)).0);
+
+    // prove-open at a mark where the position is below maintenance
+    let unhealthy = run(&["prove-open", d], Some(&open_input(Some(5_263))));
+    assert!(!unhealthy.status.success());
+    assert!(unhealthy.stdout.is_empty());
+    let err = String::from_utf8_lossy(&unhealthy.stderr);
+    assert!(err.contains("maintenance"), "{err}");
+    assert!(!err.contains("panicked"));
+    assert!(!err.contains(&STANDARD.encode(QUOTE_BLINDER)));
+
+    // prove-close: funded profit at $120,000 with a $2 funding delta
+    let close = ok_json(&run(
+        &["prove-close", d],
+        Some(&input(Some(50), Some(12_000), Some(200))),
+    ));
+    assert_eq!(close.as_object().unwrap().len(), 5);
+    assert_eq!(close["refund"], json!(79_800));
+    assert_eq!(close["bad_debt"], json!(0));
+    assert_eq!(b64(&close["commitment"]), cm);
+    let cproof = b64(&close["proof"]);
+    let cst = verifier::liquidation_inputs(&cm, &o.context, 50, 12_000, 200, 79_800, 0);
+    assert!(native_verify(&close_vk, &cproof, &cst).0);
+    assert!(!native_verify(&liq_vk, &cproof, &cst).0);
+
+    // prove-close on the distressed slot pays no bounty
+    let close = ok_json(&run(
+        &["prove-close", d],
+        Some(&input(Some(51), Some(5_200), Some(200))),
+    ));
+    assert_eq!(close["refund"], json!(11_800));
+    let missing = run(&["prove-close", d], Some(&input(Some(1), None, None)));
+    assert!(!missing.status.success());
 
     // prove-liquidation (spec fixture at 5,200 ticks)
     let liq = ok_json(&run(
@@ -160,11 +244,41 @@ fn cli_end_to_end() {
     let empty = fresh_dir("empty");
     let nokeys = run(
         &["prove-open", empty.to_str().unwrap()],
-        Some(&input(None, None, None)),
+        Some(&open_input(Some(OPEN_PRICE))),
     );
     assert!(!nokeys.status.success());
+    let nokeys = run(&["keys", empty.to_str().unwrap()], None);
+    assert!(!nokeys.status.success());
+    assert!(nokeys.stdout.is_empty());
+    assert!(!empty.exists());
+
+    // keys refuses a .vk file that does not match its proving key
+    let mut tampered = close_vk.clone();
+    tampered[200] ^= 1;
+    std::fs::write(dir.join("close.vk"), &tampered).unwrap();
+    let mismatch = run(&["keys", d], None);
+    assert!(!mismatch.status.success());
+    assert!(String::from_utf8_lossy(&mismatch.stderr).contains("does not match"));
 
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn setup_refuses_partial_key_material() {
+    for existing in KEY_FILES {
+        let dir = fresh_dir("partial");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(existing), b"keep").unwrap();
+        let out = run(&["setup", dir.to_str().unwrap()], None);
+        assert!(!out.status.success(), "{existing}");
+        assert!(out.stdout.is_empty());
+        assert!(String::from_utf8_lossy(&out.stderr).contains("already exists"));
+        assert_eq!(std::fs::read(dir.join(existing)).unwrap(), b"keep");
+        for f in KEY_FILES {
+            assert_eq!(dir.join(f).exists(), f == existing, "{existing} {f}");
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }
 
 #[test]
@@ -189,6 +303,14 @@ fn cli_rejects_bad_input() {
         // unknown field
         json!({"context": STANDARD.encode(o.context), "size_lots": 10, "x": 1,
                "entry_ticks": 10000, "margin_cents": 50000, "blinder": STANDARD.encode(o.blinder)}),
+        // quote blinder of the wrong length
+        json!({"context": STANDARD.encode(o.context), "size_lots": 10,
+               "entry_ticks": 10000, "margin_cents": 50000, "blinder": STANDARD.encode(o.blinder),
+               "quote_blinder": STANDARD.encode([0u8; 33])}),
+        // opening mark out of u32 range
+        json!({"context": STANDARD.encode(o.context), "size_lots": 10,
+               "entry_ticks": 10000, "margin_cents": 50000, "blinder": STANDARD.encode(o.blinder),
+               "open_price_ticks": 1u64 << 32}),
     ];
     for c in cases {
         let out = run(&["commit"], Some(&c.to_string()));

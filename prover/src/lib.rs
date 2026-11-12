@@ -1,5 +1,6 @@
-//! Xythum NEAR sandbox prover: Groth16 (BLS12-381) circuits for the open and
-//! liquidation statements of `docs/SPEC.md`, a pure Rust reference model, and
+//! Xythum NEAR sandbox prover: Groth16 (BLS12-381) circuits for the open,
+//! liquidation, and close statements of `docs/FUNDED-MARKET.md` (falling back
+//! to `docs/SPEC.md`), a pure Rust reference model, and
 //! NEP-488 encodings consumed by the contract verifier (`src/verifier.rs`).
 //!
 //! The verifier construction (negate `A` with `bls12381_p1_sum`, fold public
