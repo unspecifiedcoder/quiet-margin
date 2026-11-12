@@ -22,7 +22,10 @@ the four files in [`demo/`](demo/). It reads nothing else from the repository.
 The page steps through the second testnet position: the private open at
 $100,000, a liquidation refused at $70,000 because the position is healthy,
 cold Keeper B liquidating at $52,000 while the trader and Keeper A are offline,
-and the refused replay and bounty payout. Each step shows the synthetic trader
+and the refused replay and bounty payout. The testnet runner resubmitted the
+same liquidation arguments, proof included, for the replay
+([`scripts/testnet-demo.mjs`](scripts/testnet-demo.mjs#L311)); the receipt
+verifier below does not compare proof bytes. Each step shows the synthetic trader
 values beside the recorded public transaction, with its hash and NearBlocks
 link. Use the tabs, arrow keys, or Previous and Next. `#step-1` to `#step-4`
 link to a step.
@@ -52,13 +55,18 @@ node scripts/verify-demo-receipts.mjs
 
 The verifier reads [`demo/receipts.json`](demo/receipts.json), the same
 manifest the page renders, and checks it against the public testnet RPC. It
-needs no keys and sends only read-only queries. For each transaction it checks
-that the RPC returned the requested hash, `FINAL` execution status, signer and receiver, method and public arguments,
-the expected failure reason, and the receipt event logs. For settlements it
-reads `get_oracle` at the block where the market executed the call, which shows
-the oracle round and price the contract used. It also checks the deployed Wasm
-hashes, roles, verifying-key fingerprints, and the ledger and token balance
-after the final payout. Expected output ends with:
+needs no keys and sends only read-only queries. For each listed transaction it
+checks that the RPC returned the requested hash, `FINAL` execution status,
+signer and receiver, the method and the subset of public arguments listed in
+the manifest, the expected failure reason, and the receipt event logs.
+Arguments the manifest does not list, including proof bytes and ciphertexts,
+are not compared. The separate `stage_position` and maker `approve_quote`
+transactions are not in the manifest and are not checked. For opens and
+settlements it reads `get_oracle` at the block where the market executed the
+call, which shows the oracle round and price the contract used. It also checks
+the deployed Wasm hashes, roles, verifying-key fingerprints, and the ledger and
+token balance at the market receipt that emitted the final payout's
+`withdrawal_resolved` event. Expected output ends with:
 
 ```text
 PASS healthy_refused        failed in market.xythum-perps-demo.testnet with Smart contract panicked: ERR_PROOF_INVALID
@@ -122,7 +130,7 @@ reviewed run.
 | On-chain Groth16 verifier | [`src/verifier.rs`](src/verifier.rs#L1-L20) for encodings, [`verify`](src/verifier.rs#L77) on NEP-488 host functions |
 | Oracle, staging, maker approval, open | [`src/lib.rs`](src/lib.rs#L569-L765) |
 | Close and liquidate | [`src/lib.rs`](src/lib.rs#L772-L819) |
-| Atomic settlement | [`src/lib.rs` `settle`](src/lib.rs#L960-L1058): the contract builds the proof statement from its own oracle and slot, then clears the slot in the same receipt that pays |
+| Atomic settlement | [`src/lib.rs` `settle`](src/lib.rs#L960-L1058): the contract builds the proof statement from its own oracle and slot, then clears the slot and credits the refund and any keeper bounty as claims in the same receipt. Tokens move later, in separate `withdraw` receipts |
 | Claims and callback recovery | [`src/lib.rs`](src/lib.rs#L826-L894) |
 | Keeper envelopes and acknowledgments | [`tests/actor.mjs`](tests/actor.mjs#L77-L144) |
 | Maker quote check | [`makerApproval`](tests/actor.mjs#L159-L169): 1% price band and exact quote digest |
@@ -150,8 +158,10 @@ reviewed run.
   cancels out of the refund. The page derives this from public data only.
 - **Demo trust model.** The oracle is a test-controlled account, the
   collateral is a mock token, the Groth16 setup is single-party, and the
-  testnet operator controlled both keepers. A stalled oracle or loss of both keeper
-  keys leaves a position locked. [`docs/TESTNET-REVIEW.md`](docs/TESTNET-REVIEW.md)
+  testnet operator controlled both keepers. A stalled oracle leaves a
+  position locked. Losing both keeper keys disables keeper liquidation, but
+  the trader can still close voluntarily while they keep their witness and a
+  fresh oracle round is available. [`docs/TESTNET-REVIEW.md`](docs/TESTNET-REVIEW.md)
   lists the remaining production-readiness items.
 
 ## 6. Sources and baseline disclosure

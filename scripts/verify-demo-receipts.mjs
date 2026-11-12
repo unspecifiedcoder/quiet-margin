@@ -181,11 +181,22 @@ async function verifyTransaction(entry) {
     }
   }
   if (expect.ledger_after) {
-    const lastMarket = tx.receipts_outcome.findLast(({ outcome }) => outcome.executor_id === accounts.market);
+    // Read the snapshot at the market receipt that emitted the expected
+    // withdrawal_resolved event, rather than relying on receipt order.
+    const wanted = expect.events?.find((event) => event.event === 'withdrawal_resolved');
+    const resolved = wanted ? tx.receipts_outcome.filter((receipt) =>
+      receipt.outcome.executor_id === accounts.market && events([receipt]).some((event) =>
+        event.standard === wanted.standard && event.event === wanted.event
+        && matches(event.data?.[0], wanted.data))) : [];
+    if (resolved.length !== 1) {
+      check(id, false, `expected one market receipt emitting withdrawal_resolved, found ${resolved.length}`);
+      return;
+    }
+    const [resolvedReceipt] = resolved;
     try {
-      const ledger = await view(accounts.market, 'get_ledger', {}, lastMarket.block_hash);
-      check(id, isDeepStrictEqual(ledger, expect.ledger_after), `ledger after settlement ${pretty(ledger)}`);
-      const balance = await view(market.token.account, 'ft_balance_of', { account_id: accounts.market }, lastMarket.block_hash);
+      const ledger = await view(accounts.market, 'get_ledger', {}, resolvedReceipt.block_hash);
+      check(id, isDeepStrictEqual(ledger, expect.ledger_after), `ledger after final withdrawal ${pretty(ledger)}`);
+      const balance = await view(market.token.account, 'ft_balance_of', { account_id: accounts.market }, resolvedReceipt.block_hash);
       check(id, balance === expect.market_token_balance_after, `market holds ${balance} mUSDC cents`);
     } catch (error) {
       historicalError(id, 'ledger', error);

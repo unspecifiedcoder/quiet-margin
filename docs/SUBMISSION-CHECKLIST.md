@@ -53,9 +53,9 @@ or any signing key.
 | 3 | Open | `#step-1` | Left is the synthetic trader view. Right is the public transaction. The chain sees only digests, two encrypted keeper envelopes, and fixed escrow. |
 | 4 | Healthy refusal | `#step-2` | At $70,000 equity is $198 against $35 maintenance. The contract supplies its own oracle price to the verifier, so the keeper's proof fails with `ERR_PROOF_INVALID`. |
 | 5 | Cold keeper | `#step-3` | At $52,000 equity is $18 against $26. Keeper B alone decrypts its envelope and liquidates while the trader and Keeper A are offline. The derived refund matches the public 117 mUSDC. |
-| 6 | Settlement | `#step-4` | Replay fails with `ERR_NO_ACTIVE`. Keeper B withdraws its 1 mUSDC bounty. Claims equal the market's token balance. |
+| 6 | Settlement | `#step-4` | The runner resubmitted the same liquidation, and it fails with `ERR_NO_ACTIVE`. Keeper B withdraws its 1 mUSDC bounty. Claims equal the market's token balance. |
 | 7 | Inference | Inference section | Honest limit: after a profitable close, 798 minus 600 plus 2 gives $200 gross, below the PnL cap. If the maker follows its off-chain 1% band, there is exactly one answer, 0.01 BTC at $100,000. Margin stays hidden. |
-| 8 | Verify | `node scripts/verify-demo-receipts.mjs --strict` scrolling to `96 passed, 0 failed, 0 skipped` | Anyone can check these receipts against public RPC without keys. |
+| 8 | Verify | `node scripts/verify-demo-receipts.mjs --strict` scrolling to `96 passed, 0 failed, 0 skipped` | Anyone can check the listed receipts and the manifest's public arguments against public RPC without keys. |
 | 9 | Explorer | One NearBlocks link from the page | The same hash on a public explorer. |
-| 10 | Code | `src/lib.rs` `settle`, then `prover/src/circuit.rs` settlement relation | The contract builds the statement from its own state and clears the slot in the same receipt that pays. |
+| 10 | Code | `src/lib.rs` `settle`, then `prover/src/circuit.rs` settlement relation | The contract builds the statement from its own state and clears the slot and credits the refund and bounty as claims in the same receipt. Later withdraw receipts pay the tokens. |
 | 11 | Close | `JUDGES.md` threat model | Test oracle, mock token, single-party setup, and the testnet operator controlled both keepers. These are the next production steps. |
