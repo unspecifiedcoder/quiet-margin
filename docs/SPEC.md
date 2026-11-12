@@ -111,10 +111,10 @@ in this bounded test instance.
   the vault. Reject or refund everything else. Keep balances within u64.
 - `publish_oracle(round, price_ticks, funding_cents)` is oracle-only.
   Require a strictly increasing round from a nonzero first round and valid
-  price and monotonic funding. Store publication height. Freshness is 1,000
+  price in 1–20,000 ticks and monotonic funding. Store publication height. Freshness is 1,000
   blocks inclusive for the deterministic Sandbox.
 - `stage_position(nonce, commitment, ciphertexts)` is trader-only while the
-  slot is empty. Exactly two nonempty ciphertexts of 1–1024 bytes in keeper
+  slot is empty. Exactly two 144-byte ciphertexts in keeper
   order are persisted on chain, visible via `get_pending()`. Replacing the
   pending item clears maker approval. Reject a nonce other than the next one.
 - `approve_quote(nonce, commitment, expires_at)` is maker-only. Match the
@@ -151,7 +151,11 @@ validates context and the exact commitment, then signs the message. A keeper
 that cannot retrieve, decrypt, or verify a witness withholds its signature.
 The contract checks the exact ciphertext hash and signature. The Sandbox
 uses X25519 recipient/ephemeral keys, HKDF-SHA256, and AES-256-GCM with a fresh
-96-bit nonce. The keeper retains its encryption and signing keys across
+96-bit nonce. HKDF uses the commitment as salt and ASCII
+`xythum:keeper-envelope:v1` as info. AES-GCM uses the commitment as
+associated data. Each ciphertext is the 44-byte ephemeral X25519 DER SPKI,
+the 12-byte nonce, the 16-byte tag, and the encrypted 72-byte commitment
+preimage. The keeper retains its encryption and signing keys across
 restarts. Trader and Keeper A are offline after admission. Keeper B starts
 in a fresh process, reads the active ciphertext by RPC, decrypts, and proves.
 The two keeper processes exercise failover under one operator.
@@ -160,11 +164,18 @@ The two keeper processes exercise failover under one operator.
 
 Public observers see accounts, fixed escrow and reserve, ciphertext lengths,
 commitment, oracle rounds, settlement, withdrawals and balances. Direction
-and funding checkpoint are fixed in this market. Settlement and prior knowledge
-can leak PnL or narrow feasible positions, especially for a singleton market.
+and funding checkpoint are fixed in this market. When post-bounty equity is
+positive, the refund can reveal net PnL.
+When no post-bounty equity remains, the refund directly reveals assigned
+margin from the unused escrow. Prior knowledge can further narrow feasible
+openings in a singleton market.
 The encrypted witness and exact opening are available to the trader and
-both keepers. Malicious keeper attestations can cause witness unavailability
-and the same-team test assumes honest attestations.
+both keepers. The Sandbox maker approves a commitment subject to the proof's
+public risk policy. The contract authenticates that approval and its expiry.
+A stalled oracle or loss of both keeper keys leaves an active slot locked.
+A superseded oracle round requires a fresh proof. The maker vault has no
+withdrawal method in this milestone. Malicious keeper attestations can cause
+witness unavailability, and the same-team test assumes honest attestations.
 
 Run with synthetic assets on native NEAR Sandbox. Check final receipt status
 and conservation. Try missing, undecryptable, and mismatched payloads, a

@@ -15,12 +15,8 @@ use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_snark::SNARK;
 use rand::rngs::OsRng;
 
-use crate::circuit::{
-    LiquidationCircuit, LiquidationStatement, OpenCircuit, OpenStatement,
-};
-use crate::encoding::{
-    LIQUIDATION_VK_LEN, OPEN_VK_LEN, proof_bytes, scalars_to_fr, vk_bytes,
-};
+use crate::circuit::{LiquidationCircuit, LiquidationStatement, OpenCircuit, OpenStatement};
+use crate::encoding::{LIQUIDATION_VK_LEN, OPEN_VK_LEN, proof_bytes, scalars_to_fr, vk_bytes};
 use crate::model::{self, Opening, Oracle, Settlement, sha256};
 
 pub const OPEN_PK_FILE: &str = "open.pk";
@@ -73,7 +69,10 @@ pub struct LiquidationOutput {
     pub settlement: Settlement,
 }
 
-fn write_new(path: &Path, bytes: impl FnOnce(&mut BufWriter<File>) -> Result<(), Error>) -> Result<(), Error> {
+fn write_new(
+    path: &Path,
+    bytes: impl FnOnce(&mut BufWriter<File>) -> Result<(), Error>,
+) -> Result<(), Error> {
     let file = OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -85,10 +84,7 @@ fn write_new(path: &Path, bytes: impl FnOnce(&mut BufWriter<File>) -> Result<(),
 }
 
 /// Fresh OS-random Groth16 setup for both statements.
-pub fn generate_keys() -> Result<
-    (ProvingKey<Bls12_381>, ProvingKey<Bls12_381>),
-    Error,
-> {
+pub fn generate_keys() -> Result<(ProvingKey<Bls12_381>, ProvingKey<Bls12_381>), Error> {
     let mut rng = OsRng;
     let (open_pk, _) =
         Groth16::<Bls12_381>::circuit_specific_setup(OpenCircuit::setup_shape(), &mut rng)
@@ -99,7 +95,10 @@ pub fn generate_keys() -> Result<
     Ok((open_pk, liq_pk))
 }
 
-pub fn setup_output(open_vk: &VerifyingKey<Bls12_381>, liq_vk: &VerifyingKey<Bls12_381>) -> SetupOutput {
+pub fn setup_output(
+    open_vk: &VerifyingKey<Bls12_381>,
+    liq_vk: &VerifyingKey<Bls12_381>,
+) -> SetupOutput {
     let open_vk = vk_bytes(open_vk);
     let liquidation_vk = vk_bytes(liq_vk);
     assert_eq!(open_vk.len(), OPEN_VK_LEN);
@@ -117,7 +116,12 @@ pub fn setup_output(open_vk: &VerifyingKey<Bls12_381>, liq_vk: &VerifyingKey<Bls
 pub fn setup(dir: &Path) -> Result<SetupOutput, Error> {
     fs::create_dir_all(dir)
         .map_err(|e| Error::Io(format!("cannot create {}: {e}", dir.display())))?;
-    for name in [OPEN_PK_FILE, LIQUIDATION_PK_FILE, OPEN_VK_FILE, LIQUIDATION_VK_FILE] {
+    for name in [
+        OPEN_PK_FILE,
+        LIQUIDATION_PK_FILE,
+        OPEN_VK_FILE,
+        LIQUIDATION_VK_FILE,
+    ] {
         if dir.join(name).exists() {
             return Err(Error::Io(format!(
                 "{} already exists; use a fresh directory",
@@ -154,7 +158,10 @@ pub fn load_pk(dir: &Path, name: &str) -> Result<ProvingKey<Bls12_381>, Error> {
         .map_err(|e| Error::Key(format!("cannot decode {}: {e}", path.display())))
 }
 
-pub fn prove_open_with(pk: &ProvingKey<Bls12_381>, opening: &Opening) -> Result<ProofOutput, Error> {
+pub fn prove_open_with(
+    pk: &ProvingKey<Bls12_381>,
+    opening: &Opening,
+) -> Result<ProofOutput, Error> {
     model::check_open(opening)?;
     let statement = OpenStatement::honest(opening);
     let circuit = OpenCircuit {
@@ -210,7 +217,9 @@ fn self_check(
     if ok {
         Ok(())
     } else {
-        Err(Error::Proof("generated proof failed self-verification".into()))
+        Err(Error::Proof(
+            "generated proof failed self-verification".into(),
+        ))
     }
 }
 

@@ -1,2 +1,6 @@
-/target
-`nnode_modules/`n.sandbox/`n.env`n*.witness.json
+/target/
+/prover/target/
+/node_modules/
+/.sandbox/
+.env
+*.witness.json

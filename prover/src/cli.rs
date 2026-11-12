@@ -23,7 +23,8 @@ use serde::{Deserialize, Serialize};
 use crate::api;
 use crate::model::{self, Opening, Oracle};
 
-const USAGE: &str = "usage: xythum-prover <setup <dir> | commit | prove-open <dir> | prove-liquidation <dir>>";
+const USAGE: &str =
+    "usage: xythum-prover <setup <dir> | commit | prove-open <dir> | prove-liquidation <dir>>";
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -124,7 +125,10 @@ fn to_json<T: Serialize>(v: &T) -> String {
 }
 
 /// Runs a command; returns the stdout JSON line or an error message.
-pub fn run(args: &[String], stdin: impl FnOnce() -> Result<String, String>) -> Result<String, String> {
+pub fn run(
+    args: &[String],
+    stdin: impl FnOnce() -> Result<String, String>,
+) -> Result<String, String> {
     match args {
         [cmd, dir] if cmd == "setup" => {
             let out = api::setup(Path::new(dir)).map_err(|e| e.to_string())?;

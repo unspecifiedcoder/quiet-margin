@@ -29,8 +29,9 @@ pub const MAINTENANCE_DIVISOR: u32 = 20;
 
 /// The circuit binds oracle rounds as nonzero `u64` values.
 pub const MIN_ROUND: u64 = 1;
-/// The circuit binds oracle prices as nonzero `u32` tick values.
+/// Oracle prices have the same tick bounds as entry prices.
 pub const MIN_PRICE_TICKS: u32 = 1;
+pub const MAX_PRICE_TICKS: u32 = MAX_ENTRY_TICKS as u32;
 
 pub const MARKET_PREFIX: &[u8] = b"xythum:BTC-USDC:v1:";
 pub const CONTEXT_PREFIX: &[u8] = b"xythum:position:v1:";
@@ -74,7 +75,7 @@ pub enum ModelError {
     MarginOutOfRange,
     LeverageExceeded,
     ZeroRound,
-    ZeroPrice,
+    PriceOutOfRange,
     FundingOutOfRange,
     /// `20 * equity >= price * lots`; equality is healthy.
     Healthy,
@@ -88,7 +89,7 @@ impl core::fmt::Display for ModelError {
             ModelError::MarginOutOfRange => "margin_cents must be in 1..=60000",
             ModelError::LeverageExceeded => "entry_ticks * size_lots must be <= 3 * margin_cents",
             ModelError::ZeroRound => "round must be nonzero",
-            ModelError::ZeroPrice => "price_ticks must be nonzero",
+            ModelError::PriceOutOfRange => "price_ticks must be in 1..=20000",
             ModelError::FundingOutOfRange => "funding_cents must be in 0..=200",
             ModelError::Healthy => {
                 "position is healthy at this oracle round (equity is at least 5% \
@@ -162,8 +163,8 @@ pub fn check_oracle(oracle: &Oracle) -> Result<(), ModelError> {
     if oracle.round < MIN_ROUND {
         return Err(ModelError::ZeroRound);
     }
-    if oracle.price_ticks < MIN_PRICE_TICKS {
-        return Err(ModelError::ZeroPrice);
+    if !(MIN_PRICE_TICKS..=MAX_PRICE_TICKS).contains(&oracle.price_ticks) {
+        return Err(ModelError::PriceOutOfRange);
     }
     if oracle.funding_cents > MAX_FUNDING_CENTS {
         return Err(ModelError::FundingOutOfRange);
@@ -183,8 +184,7 @@ pub fn equity(o: &Opening, oracle: &Oracle) -> i128 {
 
 /// `20 * equity < price * lots`
 pub fn is_liquidatable(o: &Opening, oracle: &Oracle) -> bool {
-    MAINTENANCE_DIVISOR as i128 * equity(o, oracle)
-        < oracle.price_ticks as i128 * o.lots as i128
+    MAINTENANCE_DIVISOR as i128 * equity(o, oracle) < oracle.price_ticks as i128 * o.lots as i128
 }
 
 /// Settlement formulas evaluated without the health or bounds checks.

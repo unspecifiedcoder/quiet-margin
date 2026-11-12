@@ -113,7 +113,10 @@ fn generated_vks_are_well_formed() {
     assert_eq!(k.liq_vk.len(), verifier::LIQUIDATION_VK_LEN);
     assert!(native_validate_vk(&k.open_vk, verifier::OPEN_INPUTS));
     assert!(native_validate_vk(&k.liq_vk, verifier::LIQUIDATION_INPUTS));
-    assert!(!native_validate_vk(&k.open_vk, verifier::LIQUIDATION_INPUTS));
+    assert!(!native_validate_vk(
+        &k.open_vk,
+        verifier::LIQUIDATION_INPUTS
+    ));
     // Every public input has a distinct, non-identity IC point, so each input
     // is bound (an unused input would have IC = 0 and be malleable).
     for vk in [&k.open.vk, &k.liq.vk] {
@@ -217,15 +220,8 @@ fn spec_fixture_liquidation_verifies_natively() {
             bad_debt: 0
         }
     );
-    let inputs = verifier::liquidation_inputs(
-        &model::commitment(&o),
-        &o.context,
-        3,
-        5_200,
-        200,
-        11_700,
-        0,
-    );
+    let inputs =
+        verifier::liquidation_inputs(&model::commitment(&o), &o.context, 3, 5_200, 200, 11_700, 0);
     let (ok, gas) = native_verify(&k.liq_vk, &out.proof.proof, &inputs);
     assert!(ok);
     eprintln!("liquidation native verify gas: {gas}");
@@ -243,15 +239,8 @@ fn spec_fixture_liquidation_verifies_natively() {
         }
     }
     // Same oracle values under a different round: fails.
-    let next_round = verifier::liquidation_inputs(
-        &model::commitment(&o),
-        &o.context,
-        4,
-        5_200,
-        200,
-        11_700,
-        0,
-    );
+    let next_round =
+        verifier::liquidation_inputs(&model::commitment(&o), &o.context, 4, 5_200, 200, 11_700, 0);
     assert!(!native_verify(&k.liq_vk, &out.proof.proof, &next_round).0);
     assert!(!ark_verify(&k.liq, &next_round, &out.proof.proof));
 }
@@ -355,7 +344,12 @@ fn price_gap_bad_debt_is_exact() {
     );
     let st = LiquidationStatement::honest(&o, &gap, &out.settlement);
     assert!(native_verify(&k.liq_vk, &out.proof.proof, &st.inputs()).0);
-    for (refund, bad_debt) in [(10_000, 0), (10_000, 49_199), (10_000, 49_201), (9_999, 49_200)] {
+    for (refund, bad_debt) in [
+        (10_000, 0),
+        (10_000, 49_199),
+        (10_000, 49_201),
+        (9_999, 49_200),
+    ] {
         let mut s = st;
         s.refund = refund;
         s.bad_debt = bad_debt;

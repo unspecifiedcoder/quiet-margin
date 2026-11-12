@@ -22,8 +22,8 @@ use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef, SynthesisE
 use crate::encoding::{SCALAR_LEN, liquidation_inputs, open_inputs, scalars_to_fr};
 use crate::model::{
     BOUNTY_CENTS, ESCROW_CENTS, MAINTENANCE_DIVISOR, MAX_ENTRY_TICKS, MAX_FUNDING_CENTS,
-    MAX_LEVERAGE, MAX_LOTS, MAX_MARGIN_CENTS, MIN_ENTRY_TICKS, MIN_LOTS, MIN_MARGIN_CENTS,
-    Opening, Oracle, PNL_CAP_CENTS, Settlement, commitment,
+    MAX_LEVERAGE, MAX_LOTS, MAX_MARGIN_CENTS, MIN_ENTRY_TICKS, MIN_LOTS, MIN_MARGIN_CENTS, Opening,
+    Oracle, PNL_CAP_CENTS, Settlement, commitment,
 };
 
 /// Bit width for comparison slack of derived (signed) quantities.
@@ -329,9 +329,15 @@ impl ConstraintSynthesizer<Fr> for LiquidationCircuit {
         // round: nonzero u64 (strictly bound; any change alters the statement).
         enforce_bits(&cs, round, 64)?;
         enforce_bits(&cs, &(round - constant(&cs, 1)), 64)?;
-        // price: nonzero u32 ticks.
+        // The authenticated oracle supports the same bounds as the entry price.
         enforce_bits(&cs, price, 32)?;
-        enforce_bits(&cs, &(price - constant(&cs, 1)), 32)?;
+        enforce_range(
+            &cs,
+            price,
+            crate::model::MIN_PRICE_TICKS as u64,
+            crate::model::MAX_PRICE_TICKS as u64,
+            32,
+        )?;
         // funding in 0..=200.
         enforce_range(&cs, funding, 0, MAX_FUNDING_CENTS as u64, 8)?;
 
