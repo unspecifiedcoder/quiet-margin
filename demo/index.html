@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Xythum NEAR Perps · testnet evidence replay</title>
+  <meta name="description" content="Static replay of the Xythum NEAR Perps native NEAR testnet demo, with synthetic trader values beside public transaction evidence.">
+  <link rel="stylesheet" href="styles.css">
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <a class="skip" href="#replay">Skip to the replay</a>
+  <header class="masthead">
+    <div class="wrap">
+      <p class="eyebrow">Xythum NEAR Perps · BTC / mock USDC · NEAR testnet</p>
+      <h1>Confidential perp position, public settlement evidence</h1>
+      <p class="notice" role="note">
+        <strong>Static replay.</strong> Every hash below is a recorded, final NEAR testnet
+        transaction. This page is read-only: it never signs, submits, or reads live chain state, and cannot create trades.
+        Values labeled <em>synthetic</em> are the published fixture from <code>tests/actor.mjs</code>. In the run, the maker
+        saw size and entry; the trader and both keepers saw the full witness. Blinders are never public in plaintext.
+      </p>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section id="replay" aria-labelledby="replay-title">
+      <div class="section-head">
+        <h2 id="replay-title">Cold-keeper liquidation, nonce 2</h2>
+        <p>Step through the second position. The trader and Keeper A are offline after admission.</p>
+      </div>
+      <div class="stepper">
+        <div role="tablist" aria-label="Replay steps" id="steps"></div>
+        <div class="step-nav">
+          <button type="button" id="prev">Previous</button>
+          <span id="step-count" aria-live="polite"></span>
+          <button type="button" id="next">Next</button>
+        </div>
+      </div>
+      <div id="step-panel" role="tabpanel" tabindex="0"></div>
+    </section>
+
+    <section id="inference" aria-labelledby="inference-title">
+      <div class="section-head">
+        <h2 id="inference-title">What a public observer can infer after a profitable close</h2>
+        <p>Nonce 1 closed voluntarily at $120,000. The refund is public. With positive equity, PnL below the cap, and the maker's off-chain 1% band, it determines the hidden size and entry.</p>
+      </div>
+      <div id="inference-body"></div>
+    </section>
+
+    <section id="knowledge" aria-labelledby="knowledge-title">
+      <div class="section-head">
+        <h2 id="knowledge-title">Who knows the position terms</h2>
+      </div>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th scope="col">Party</th><th scope="col">Knows</th><th scope="col">Why</th></tr></thead>
+          <tbody>
+            <tr><th scope="row">Public observer</th><td>Accounts, the 600 mUSDC escrow and 601 mUSDC maker reserve, salted commitment and quote digests, two 144-byte ciphertexts, oracle rounds, settlement amounts, withdrawals</td><td>Everything on chain. Size, entry, and margin stay hidden until settlement amounts constrain them.</td></tr>
+            <tr><th scope="row">Maker</th><td>Exact size and entry, plus an independent quote blinder</td><td>The maker receives the quote terms off chain, recomputes the quote digest, and signs an approval bound to the staged opening mark. It must know what it is pricing. It does not learn margin.</td></tr>
+            <tr><th scope="row">Keeper A and Keeper B</th><td>Full opening: size, entry, margin, position blinder</td><td>Each decrypts its own on-chain envelope and checks the commitment before signing admission, so either one can prove liquidation alone. That is what lets Keeper B act while the trader and Keeper A are offline.</td></tr>
+            <tr><th scope="row">Trader</th><td>Full opening and the position blinder</td><td>Needed to prove a voluntary close.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="fine">Demo trust model: deterministic test oracle, mock token, single-party Groth16 setup, and both keepers controlled by the testnet operator. Keepers are trusted to keep witnesses confidential and to attest honestly.</p>
+    </section>
+
+    <section id="deployment" aria-labelledby="deployment-title">
+      <div class="section-head">
+        <h2 id="deployment-title">Deployment and market account</h2>
+      </div>
+      <div id="deployment-body"></div>
+    </section>
+
+    <section id="ledger" aria-labelledby="ledger-title">
+      <div class="section-head">
+        <h2 id="ledger-title">All recorded transactions</h2>
+        <p>Re-check every row without keys: <code>node scripts/verify-demo-receipts.mjs</code></p>
+      </div>
+      <div class="table-scroll" id="ledger-body"></div>
+    </section>
+  </main>
+
+  <footer class="wrap fine" id="footer"></footer>
+  <noscript><p class="wrap">The replay needs JavaScript to render the receipt manifest. The raw data is in <code>receipts.json</code>.</p></noscript>
+</body>
+</html>

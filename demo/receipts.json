@@ -1,0 +1,290 @@
+{
+  "schema": "xythum-near-perps/demo-receipts/v1",
+  "notice": "Static replay of recorded NEAR testnet transactions. The viewer never signs, submits, or reads live chain state.",
+  "source": {
+    "record": "docs/TESTNET-ADDRESSES.md",
+    "commit": "0413bd2c97e0b2f5bf66e0b45f78e1ec00f12c32",
+    "runner": "scripts/testnet-demo.mjs",
+    "actor": "tests/actor.mjs"
+  },
+  "network": {
+    "chain_id": "testnet",
+    "rpc": "https://test.rpc.fastnear.com",
+    "archival_rpc": "https://archival-rpc.testnet.fastnear.com",
+    "explorer_tx": "https://testnet.nearblocks.io/txns/"
+  },
+  "accounts": {
+    "demo": "xythum-perps-demo.testnet",
+    "market": "market.xythum-perps-demo.testnet",
+    "token": "musdc.xythum-perps-demo.testnet",
+    "trader": "trader.xythum-perps-demo.testnet",
+    "maker": "maker.xythum-perps-demo.testnet",
+    "oracle": "oracle.xythum-perps-demo.testnet",
+    "keeper_a": "keeper-a.xythum-perps-demo.testnet",
+    "keeper_b": "keeper-b.xythum-perps-demo.testnet"
+  },
+  "market": {
+    "account": "market.xythum-perps-demo.testnet",
+    "code_sha256": "9004770854c3d3a1aa8c71d7a19d258fac568abb41cda1dd2ad1827b5c80db7c",
+    "domain_b64": "xBGQVL1fFbYws/wyAEhC+DCAh23EHzOYt0NVtTAqxiM=",
+    "deployment_id_b64": "ZWr2mhFGqdZePtgDGg94LIxI3Zqm2dS/dvZRHMqCVKk=",
+    "vk_sha256_b64": {
+      "open": "3sesQDTxpTB6+wdunP8crHc4Hnxv9V4TQqFQiBKIsDA=",
+      "close": "66lAStu/S3ID1d4pkYQEJHubw9EGWDNIO+giKUDfcIs=",
+      "liquidation": "hvfOfFq80ldBwlvMRH7dEgQfqvUeULcKpYIjnabxyOg="
+    },
+    "token": {
+      "account": "musdc.xythum-perps-demo.testnet",
+      "code_sha256": "ed4ffe1bcf2af0bab19278c4a3c10a24bae0c625245511cf324350a6daae6477",
+      "symbol": "mUSDC",
+      "decimals": 2
+    }
+  },
+  "units": {
+    "tick_usd": 10,
+    "lot_btc": 0.001,
+    "cents_per_musdc": 100,
+    "escrow_cents": 60000,
+    "reserve_cents": 60100,
+    "bounty_cents": 100,
+    "pnl_cap_cents": 60000,
+    "max_margin_cents": 60000,
+    "max_lots": 50,
+    "max_leverage": 3,
+    "maker_band_percent": 1,
+    "maker_band_source": "off-chain demo maker policy in tests/actor.mjs makerApproval(); not enforced by the contract"
+  },
+  "oracle_rounds": [
+    { "round": 1, "price_ticks": 10000, "funding_cents": 0 },
+    { "round": 2, "price_ticks": 12000, "funding_cents": 200 },
+    { "round": 3, "price_ticks": 10000, "funding_cents": 200 },
+    { "round": 4, "price_ticks": 7000, "funding_cents": 400 },
+    { "round": 5, "price_ticks": 5200, "funding_cents": 400 }
+  ],
+  "synthetic_fixture": {
+    "source": "published tests/actor.mjs prepare() defaults, used by scripts/testnet-demo.mjs for both positions. The maker sees size and entry; the trader and both keepers see the full witness. Blinders are never published in plaintext.",
+    "size_lots": 10,
+    "entry_ticks": 10000,
+    "margin_cents": 50000
+  },
+  "transactions": [
+    {
+      "id": "account_creation",
+      "title": "Demo parent account created",
+      "hash": "5vWVRkacDsZqW76oxV1NxRs9pWZzuaXtjj5hHpzNeudh",
+      "signer": "testnet",
+      "receiver": "xythum-perps-demo.testnet",
+      "expect": { "status": "success", "actions": ["CreateAccount", "Transfer", "AddKey"] }
+    },
+    {
+      "id": "market_deploy",
+      "title": "Clearing contract deployed and initialized",
+      "hash": "Ggk4jPYwAHhBvJ9x5hLMRvsG9YUA4M1T3JzkuihEjJLf",
+      "signer": "market.xythum-perps-demo.testnet",
+      "receiver": "market.xythum-perps-demo.testnet",
+      "expect": {
+        "status": "success",
+        "deploy_code_sha256": "9004770854c3d3a1aa8c71d7a19d258fac568abb41cda1dd2ad1827b5c80db7c",
+        "method": "init",
+        "args": {
+          "token_id": "musdc.xythum-perps-demo.testnet",
+          "trader_id": "trader.xythum-perps-demo.testnet",
+          "maker_id": "maker.xythum-perps-demo.testnet",
+          "oracle_id": "oracle.xythum-perps-demo.testnet",
+          "deployment_id": "ZWr2mhFGqdZePtgDGg94LIxI3Zqm2dS/dvZRHMqCVKk="
+        }
+      }
+    },
+    {
+      "id": "token_deploy",
+      "title": "Mock USDC deployed and minted",
+      "hash": "6FdjkqQKbnk62QuBWVmybeNjgZccz4H4XqhHvxaZTqKR",
+      "signer": "musdc.xythum-perps-demo.testnet",
+      "receiver": "musdc.xythum-perps-demo.testnet",
+      "expect": {
+        "status": "success",
+        "deploy_code_sha256": "ed4ffe1bcf2af0bab19278c4a3c10a24bae0c625245511cf324350a6daae6477",
+        "method": "new",
+        "args": { "owner_id": "xythum-perps-demo.testnet", "total_supply": "1000000" },
+        "events": [
+          { "executor": "musdc.xythum-perps-demo.testnet", "standard": "nep141", "event": "ft_mint",
+            "data": { "owner_id": "xythum-perps-demo.testnet", "amount": "1000000" } }
+        ]
+      }
+    },
+    {
+      "id": "trader_deposit",
+      "title": "Trader deposits 600 mUSDC escrow",
+      "hash": "EwmGiURcyHe9nW8ZWwL1iEdSwgerX9eycPh3fnC5cqHi",
+      "signer": "trader.xythum-perps-demo.testnet",
+      "receiver": "musdc.xythum-perps-demo.testnet",
+      "expect": {
+        "status": "success",
+        "method": "ft_transfer_call",
+        "args": { "receiver_id": "market.xythum-perps-demo.testnet", "amount": "60000", "msg": "trader" },
+        "events": [
+          { "executor": "musdc.xythum-perps-demo.testnet", "standard": "nep141", "event": "ft_transfer",
+            "data": { "old_owner_id": "trader.xythum-perps-demo.testnet", "new_owner_id": "market.xythum-perps-demo.testnet", "amount": "60000" } },
+          { "executor": "market.xythum-perps-demo.testnet", "standard": "xythum_near_perps", "event": "collateral_deposited",
+            "data": { "cents": 60000, "bucket": "trader" } }
+        ]
+      }
+    },
+    {
+      "id": "maker_deposit",
+      "title": "Maker funds the 1,000 mUSDC vault",
+      "hash": "3yjK8ZpPR7aLoWs5tMxQHsXg4KRu8k3cnCDwgvzomQzs",
+      "signer": "maker.xythum-perps-demo.testnet",
+      "receiver": "musdc.xythum-perps-demo.testnet",
+      "expect": {
+        "status": "success",
+        "method": "ft_transfer_call",
+        "args": { "receiver_id": "market.xythum-perps-demo.testnet", "amount": "100000", "msg": "maker" },
+        "events": [
+          { "executor": "musdc.xythum-perps-demo.testnet", "standard": "nep141", "event": "ft_transfer",
+            "data": { "old_owner_id": "maker.xythum-perps-demo.testnet", "new_owner_id": "market.xythum-perps-demo.testnet", "amount": "100000" } },
+          { "executor": "market.xythum-perps-demo.testnet", "standard": "xythum_near_perps", "event": "collateral_deposited",
+            "data": { "cents": 100000, "bucket": "maker" } }
+        ]
+      }
+    },
+    {
+      "id": "profit_open",
+      "title": "First private open, nonce 1",
+      "hash": "NuRmmJTDPeitF1rcNPU2JowbUhhGACPA4LGPN6mq7rk",
+      "signer": "trader.xythum-perps-demo.testnet",
+      "receiver": "market.xythum-perps-demo.testnet",
+      "expect": {
+        "status": "success",
+        "method": "open",
+        "args": { "nonce": 1, "commitment": "338igMg/R8ZyRqv76Q5RqfP3NjKxO7/sPeAdvqg9wyE=" },
+        "oracle": { "round": 1, "price_ticks": 10000, "funding_cents": 0 },
+        "events": [
+          { "executor": "market.xythum-perps-demo.testnet", "standard": "xythum_near_perps", "event": "position_opened",
+            "data": { "nonce": 1 } }
+        ]
+      }
+    },
+    {
+      "id": "profit_close",
+      "title": "Profitable close at $120,000",
+      "hash": "DXm8nbNxBHoGjSUeYho6WnC8vMBb1UmJG3pn24CaNowE",
+      "signer": "trader.xythum-perps-demo.testnet",
+      "receiver": "market.xythum-perps-demo.testnet",
+      "expect": {
+        "status": "success",
+        "method": "close",
+        "args": { "nonce": 1, "root": "338igMg/R8ZyRqv76Q5RqfP3NjKxO7/sPeAdvqg9wyE=", "round": 2, "refund": 79800, "bad_debt": 0 },
+        "oracle": { "round": 2, "price_ticks": 12000, "funding_cents": 200 },
+        "events": [
+          { "executor": "market.xythum-perps-demo.testnet", "standard": "xythum_near_perps", "event": "position_closed",
+            "data": { "nonce": 1, "round": 2, "refund": 79800, "bad_debt": 0 } }
+        ]
+      }
+    },
+    {
+      "id": "trader_payout",
+      "title": "Trader withdraws 198 mUSDC profit",
+      "hash": "DxWVg4roKapKVAwD5mGZafQCGbwgVqdTodLEjqFrPV2J",
+      "signer": "trader.xythum-perps-demo.testnet",
+      "receiver": "market.xythum-perps-demo.testnet",
+      "expect": {
+        "status": "success",
+        "method": "withdraw",
+        "args": { "amount": "19800" },
+        "events": [
+          { "executor": "musdc.xythum-perps-demo.testnet", "standard": "nep141", "event": "ft_transfer",
+            "data": { "old_owner_id": "market.xythum-perps-demo.testnet", "new_owner_id": "trader.xythum-perps-demo.testnet", "amount": "19800" } },
+          { "executor": "market.xythum-perps-demo.testnet", "standard": "xythum_near_perps", "event": "withdrawal_resolved",
+            "data": { "cents": 19800, "account_id": "trader.xythum-perps-demo.testnet", "success": true } }
+        ]
+      }
+    },
+    {
+      "id": "liquidation_open",
+      "title": "Second private open, nonce 2",
+      "hash": "5CNs5rAr7KLh8yfTHkMY2dQ9c8zrMtJ22eM3B4xJT1c7",
+      "signer": "trader.xythum-perps-demo.testnet",
+      "receiver": "market.xythum-perps-demo.testnet",
+      "expect": {
+        "status": "success",
+        "method": "open",
+        "args": { "nonce": 2, "commitment": "Clzxpqu0Z0HauVRjjTlgkjQhYIFDQzBCWA/AqJ2Gj/U=" },
+        "oracle": { "round": 3, "price_ticks": 10000, "funding_cents": 200 },
+        "events": [
+          { "executor": "market.xythum-perps-demo.testnet", "standard": "xythum_near_perps", "event": "position_opened",
+            "data": { "nonce": 2 } }
+        ]
+      }
+    },
+    {
+      "id": "healthy_refused",
+      "title": "Healthy liquidation refused at $70,000",
+      "hash": "GsbCfnM5Z8dyHgPV9VT5ns75HWkfxsmtD3ynYZZVBTpW",
+      "signer": "keeper-b.xythum-perps-demo.testnet",
+      "receiver": "market.xythum-perps-demo.testnet",
+      "expect": {
+        "status": "failure",
+        "error": "ERR_PROOF_INVALID",
+        "method": "liquidate",
+        "args": { "nonce": 2, "root": "Clzxpqu0Z0HauVRjjTlgkjQhYIFDQzBCWA/AqJ2Gj/U=", "round": 4, "refund": 11700, "bad_debt": 0 },
+        "oracle": { "round": 4, "price_ticks": 7000, "funding_cents": 400 },
+        "events": []
+      }
+    },
+    {
+      "id": "keeper_b_liquidation",
+      "title": "Cold Keeper B liquidates at $52,000",
+      "hash": "BDRSCJmvMfzCGwtsbtgvwpd1CKaqpZkmFcTj7Gwu7MYW",
+      "signer": "keeper-b.xythum-perps-demo.testnet",
+      "receiver": "market.xythum-perps-demo.testnet",
+      "expect": {
+        "status": "success",
+        "method": "liquidate",
+        "args": { "nonce": 2, "root": "Clzxpqu0Z0HauVRjjTlgkjQhYIFDQzBCWA/AqJ2Gj/U=", "round": 5, "refund": 11700, "bad_debt": 0 },
+        "oracle": { "round": 5, "price_ticks": 5200, "funding_cents": 400 },
+        "events": [
+          { "executor": "market.xythum-perps-demo.testnet", "standard": "xythum_near_perps", "event": "position_liquidated",
+            "data": { "nonce": 2, "round": 5, "refund": 11700, "bad_debt": 0, "keeper_index": 1 } }
+        ]
+      }
+    },
+    {
+      "id": "replay_refused",
+      "title": "Replay of the same liquidation refused",
+      "hash": "BnTNBAHZHHG4rMh6keQ77ead2TdGfTVXyfDNrecpQek5",
+      "signer": "keeper-b.xythum-perps-demo.testnet",
+      "receiver": "market.xythum-perps-demo.testnet",
+      "expect": {
+        "status": "failure",
+        "error": "ERR_NO_ACTIVE",
+        "method": "liquidate",
+        "args": { "nonce": 2, "root": "Clzxpqu0Z0HauVRjjTlgkjQhYIFDQzBCWA/AqJ2Gj/U=", "round": 5, "refund": 11700, "bad_debt": 0 },
+        "events": []
+      }
+    },
+    {
+      "id": "keeper_payout",
+      "title": "Keeper B withdraws the 1 mUSDC bounty",
+      "hash": "6Cg85J5iVzdd9QT12FSFSKFafbiTSQkdKfc6zLJtZB1m",
+      "signer": "keeper-b.xythum-perps-demo.testnet",
+      "receiver": "market.xythum-perps-demo.testnet",
+      "expect": {
+        "status": "success",
+        "method": "withdraw",
+        "args": { "amount": "100" },
+        "events": [
+          { "executor": "musdc.xythum-perps-demo.testnet", "standard": "nep141", "event": "ft_transfer",
+            "data": { "old_owner_id": "market.xythum-perps-demo.testnet", "new_owner_id": "keeper-b.xythum-perps-demo.testnet", "amount": "100" } },
+          { "executor": "market.xythum-perps-demo.testnet", "standard": "xythum_near_perps", "event": "withdrawal_resolved",
+            "data": { "cents": 100, "account_id": "keeper-b.xythum-perps-demo.testnet", "success": true } }
+        ],
+        "ledger_after": {
+          "trader_available": 11700, "trader_locked": 0, "maker_vault": 128400, "maker_reserved": 0,
+          "keeper_available": [0, 0], "pending_withdrawals": 0, "bad_debt": 0, "halted": false, "next_nonce": 3
+        },
+        "market_token_balance_after": "140100"
+      }
+    }
+  ]
+}
