@@ -4,4 +4,5 @@
 /.sandbox/
 .env
 *.witness.json
+*.keeper-keys.json
 /.testnet/
