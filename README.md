@@ -5,21 +5,40 @@ The protocol supports funded voluntary close and keeper liquidation.
 
 ## Testnet exchange
 
-The consumer app lives in `exchange/`. Each visitor's browser creates its own
-key and gets its own trader account and market on NEAR testnet. The visitor
-then deposits mock mUSDC, proves a position locally, opens it, and closes or
-withdraws. Every step links to its receipt on testnet.
-**[docs/EXCHANGE.md](docs/EXCHANGE.md)** covers the user walkthrough,
-privacy disclosures, and operator setup.
+The consumer app lives in `exchange/`. Nothing happens until the visitor
+clicks Start. Then the browser creates its own key and gets its own trader
+account and market on NEAR testnet. The visitor deposits mock mUSDC, proves a
+position locally, opens it, and closes or withdraws. Every step links to its
+receipt on testnet.
+**[docs/EXCHANGE.md](docs/EXCHANGE.md)** covers the recorded run, the user
+walkthrough, privacy disclosures, and operator setup (Node 22.12 or later).
 
-Status: the app is still being integrated. No end-to-end browser run on testnet
-has been recorded yet, and there is no public hosted instance. The app
-uses testnet only, with mock collateral and no real assets.
+**Status: one full local run against NEAR testnet has been recorded** at
+`milestone/exchange-funding` (`9211f49`). The run used a local coordinator
+and Edge. The browser was the trader's only signer, and the market was
+keyless. It covered deposit, a user-chosen long open, close at a profit,
+withdraw, a second open, and liquidation by a separate keeper after the
+browser tab was closed. The final balances reconciled with zero bad debt.
+Transaction links are in
+[docs/EXCHANGE.md](docs/EXCHANGE.md#verified-local-testnet-run).
+
+Limits of that run: long-only mock assets on testnet, no hosted instance, and
+no mainnet. The maker, oracle, and both keepers shared one operator's keys,
+so it was not an independent-operator trial. Shorts, margin edits, multiple
+slots, and shielded notes are planned as separate later layers.
+
+| Layer | Tag | Commit |
+| --- | --- | --- |
+| 0: native testnet | `milestone/native-testnet` | `0413bd2` |
+| 0: judge evidence | `milestone/judge-evidence` | `8911974` |
+| 1: browser exchange | `milestone/exchange-funding` | `9211f49` |
 
 ## Evidence: judges start here
 
 [JUDGES.md](JUDGES.md) is the short guide. The replay below is recorded
-evidence from the earlier operator-driven testnet run. It is not the app.
+evidence from the earlier operator-driven testnet run. It is not the app. It
+is kept unchanged as the fallback if the live exchange can't be run. Its
+96/96 live receipt checks still pass at both layer 0 tags.
 It needs Node 22 on Windows or Linux and no install step:
 
 ```text
@@ -52,7 +71,8 @@ It includes public proof and receipt data, Wasm and verifying-key hashes,
 timings, and ledger snapshots. Sandbox-only proving keys and keeper keys
 live in a temporary directory for the run. The fixture is synthetic.
 
-- [Testnet exchange: user and operator guide](docs/EXCHANGE.md)
+- [Testnet exchange: recorded run, user and operator guide](docs/EXCHANGE.md)
+- [Browser prover build and smoke tests](prover/browser/README.md)
 - [Funded market specification](docs/FUNDED-MARKET.md)
 - [Testnet addresses and local credential locations](docs/TESTNET-ADDRESSES.md)
 - [Original Sandbox specification](docs/SPEC.md)

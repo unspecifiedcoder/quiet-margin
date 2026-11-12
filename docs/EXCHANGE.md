@@ -7,30 +7,96 @@ isolated clearing market per visitor. It does this under the existing demo
 root, with the existing maker, oracle, keepers, mock token, and proving keys
 ([`docs/TESTNET-ADDRESSES.md`](TESTNET-ADDRESSES.md)).
 
-> **Status.** The code is still being integrated. No end-to-end browser run
-> on testnet has been recorded, and there is no public hosted instance. This
-> file describes the intended flow and the commands in the current sources. It
-> reports no results. Paths and line numbers below refer to the draft sources
-> and may move. The recorded testnet evidence is still the read-only replay in
-> [`JUDGES.md`](../JUDGES.md).
+> **Status.** One full local run against NEAR testnet has been recorded (see
+> [Verified local testnet run](#verified-local-testnet-run)). The coordinator
+> and the UI ran on the developer machine, and the chain was public NEAR
+> testnet. Scope: long-only, mock collateral, testnet only. There is no hosted
+> instance and nothing on mainnet. The earlier read-only judge replay in
+> [`JUDGES.md`](../JUDGES.md) is kept unchanged as the fallback evidence.
+
+## Layers and tags
+
+The work is split into additive layers. Each layer leaves the ones below it
+unchanged.
+
+| Layer | Tag | Commit | What it adds |
+| --- | --- | --- | --- |
+| 0 | `milestone/native-testnet` | `0413bd2` | Native NEAR contracts and the operator-driven testnet deployment |
+| 0 | `milestone/judge-evidence` | `8911974` | Judge replay, receipt verifier, keeper binding, operator enrollment checks |
+| 1 | `milestone/exchange-funding` | `9211f49` | Browser-owned sessions, in-browser proving, funded open/close/withdraw, cold Keeper B |
+
+At both layer 0 tags, `node scripts/verify-demo-receipts.mjs` still passes
+96/96 live receipt checks. Layer 1 is the exact commit `9211f49`; the run
+below used that commit.
+
+## Verified local testnet run
+
+Machine: the developer's Windows machine, Microsoft Edge, local coordinator
+and Vite UI, public NEAR testnet RPC. Transaction links open on
+[testnet.nearblocks.io](https://testnet.nearblocks.io/).
+
+**Explicit Start.** Fresh Edge visits made no signer and sent no `POST`
+until the user clicked Start. A fresh Start then provisioned a distinct pair,
+`trader-727c93ecd6da.xythum-perps-demo.testnet` and
+`market-727c93ecd6da.xythum-perps-demo.testnet`.
+
+**Primary tested session.**
+
+- Trader: `trader-62fff129df71.xythum-perps-demo.testnet`
+- Market: `market-62fff129df71.xythum-perps-demo.testnet` (keyless after setup)
+- Token: `musdc.xythum-perps-demo.testnet` (mock mUSDC)
+- The browser was the only signer for the trader account.
+- The maker vault started with 1,000 mUSDC (`XYTHUM_MAKER_VAULT_MUSDC=100000`).
+
+| Step | Detail | Transaction |
+| --- | --- | --- |
+| Deposit | 600 mUSDC, signed in the browser | [`DJvgPi8g…xkR8`](https://testnet.nearblocks.io/txns/DJvgPi8gQZtKcbSFDHCNK3zNsohxvYXBFrqQ6UE8xkR8) |
+| Open | Long 0.008 BTC with 450 mUSDC margin, chosen by the user. 65.6 s end to end on this machine. | [`9jm21tNY…6JQD`](https://testnet.nearblocks.io/txns/9jm21tNY6doDZKxLmmmfVPNGhaiRqTVa3uUMsERo6JQD) |
+| Close | At a $112,000 mark. 696 mUSDC credited. | [`FxdAqT9S…LFQT`](https://testnet.nearblocks.io/txns/FxdAqT9SUcKW7gCjyEnPydSYjkQgt64Um4xLhMdLUFQT) |
+| Withdraw | 96 mUSDC profit back to the trader account | [`4E3Pc2w1…yEr`](https://testnet.nearblocks.io/txns/4E3Pc2w1GtpuUtTMw93bpUfW2mrTvmtTv4WtVPozhyEr) |
+| Open | Long 0.010 BTC with 500 mUSDC margin | [`Cyq8EndN…MB6B`](https://testnet.nearblocks.io/txns/Cyq8EndNRHqza2TWRfT95JAGXqah49Vyn2SwCScyMB6B) |
+| Arm Keeper B | Armed at a $70,000 mark. The position was healthy and the active slot stayed unchanged. | — |
+| Liquidate | With the trader's browser tab closed, the test oracle published $52,000 through the session API. A separate Keeper B actor then liquidated. | [`F5zj6buC…54dD`](https://testnet.nearblocks.io/txns/F5zj6buC35jzdVesQxHWX4m6YJaBiFje5eBfbJ3a54dD) |
+
+**Final balances** (mUSDC): trader claim in the market 119, maker 1,384,
+Keeper B 1. The market's token balance is 1,504, equal to the sum of those
+claims. Bad debt is zero.
+
+**What this run does not show.** The maker, oracle, Keeper A, and Keeper B
+all used the same operator's keys from one `.env`. This was not an
+independent-operator trial. It used only long positions and mock assets, and
+nothing was hosted or deployed to mainnet.
+
+### Local proving measurements
+
+The browser prover and its build and smoke tests are documented in
+[`prover/browser/README.md`](../prover/browser/README.md). Measured locally on
+the same machine with an otherwise quiet browser:
+
+- `open`: about 34 s to prove; peak WASM memory about 463 MiB.
+- `close`: about 15 s to prove.
+
+The mobile layout was tested at a real mobile viewport. Proving on a phone
+has **not** been tested.
 
 ## Using the app
 
-1. **Start an account.** Open the app and choose start. The browser generates
-   an Ed25519 key and keeps it in IndexedDB (`xythum-exchange`). It uses a
+1. **Start an account.** A fresh visit does nothing until you click Start.
+   It creates no key and sends no request. On Start, the browser generates an
+   Ed25519 key and keeps it in IndexedDB (`xythum-exchange`). It uses a
    non-extractable WebCrypto key where it can. Otherwise it falls back to a
    random secret in origin storage, and the UI shows this as `origin-storage`
-   (`exchange/src/protocol/signer.js:1-5`). The browser sends only the public
-   key to `POST /api/sessions`. The coordinator then creates
-   `trader-<id>.<root>` holding only that key as full access, and it deploys
-   and locks `market-<id>.<root>`. It also funds the maker vault, publishes a
-   first oracle round, and sends the trader account test NEAR and
-   60,000 mock-mUSDC cents (`exchange/server/coordinator.mjs:204-232`,
-   `exchange/server/config.mjs:100-104`). The session bearer is returned once.
+   (`exchange/src/protocol/signer.js`). The browser enrolls with
+   `POST /api/sessions` (see [Session enrollment](#session-enrollment)). The
+   coordinator then creates `trader-<id>.<root>` holding only that key as
+   full access, and it deploys and locks `market-<id>.<root>`. It also funds
+   the maker vault, publishes a first oracle round, and sends the trader
+   account test NEAR and 60,000 mock-mUSDC cents (600 mUSDC).
    Before signing anything, the browser checks the market configuration, the
    verifying-key digests, and the distinct roles on chain
-   (`exchange/src/protocol/controller.js:255-279`). After a reload the session
-   resumes automatically (`exchange/src/main.js:25-28`).
+   (`exchange/src/protocol/controller.js`, `api.js`). After a reload, a saved
+   session reattaches automatically. A reload never creates a key or enrolls
+   (`exchange/src/main.js`).
 2. **Deposit mock funds.** Deposit moves mUSDC from your trader account into
    the market with `ft_transfer_call` (1 yocto, signed in the browser). An open
    locks a fixed 600.00 mUSDC escrow, so deposit at least that much.
@@ -46,14 +112,14 @@ root, with the existing maker, oracle, keepers, mock token, and proving keys
    - proves `open` locally in a Web Worker;
    - submits `open`.
 
-   The proving key downloads once per page load from `/api/proving/open.pk`,
-   which can take a while.
+   The proving key (about 101 MB) downloads from `/api/proving/open.pk` and is
+   checked before use (see [Proving-key pins](#proving-key-pins)).
 5. **View receipts.** The Receipts tab lists each transaction with a
    `testnet.nearblocks.io` link. Transactions signed by the server (maker
    approval, oracle marks, Keeper B) show `final` only after the browser
    checks them at FINAL: the transaction must succeed, come from the expected
    signer, and call the expected method on this market. Otherwise they stay
-   `unverified` (`controller.js:457-475`).
+   `unverified` (server-reported).
 6. **Close and withdraw.** Close requests a fresh oracle round and proves
    `close` locally. It checks the refund against the local settlement model,
    then submits. Withdraw sends available mUSDC back to your trader account.
@@ -62,11 +128,13 @@ root, with the existing maker, oracle, keepers, mock token, and proving keys
    rate (`XYTHUM_MARK_INTERVAL_MS`), count (`XYTHUM_MARKS_PER_SESSION`), and
    range (`XYTHUM_MARK_MIN_TICKS`/`MAX_TICKS`). The UI can prefill a price just
    past liquidation.
-8. **Optional: cold Keeper B.** Arming Keeper B tells the coordinator's
-   background worker to watch your active slot. It attempts at most one proof
-   per new oracle round, and the local prover refuses healthy positions before
-   any transaction (`exchange/server/worker.mjs`,
-   `coordinator.mjs:526-548`). If Keeper B liquidates first, your close is
+8. **Optional: cold Keeper B.** Arming Keeper B pins your active slot's nonce
+   and commitment. The coordinator's background worker then watches that slot
+   whether or not your browser is still open. It tries each new oracle round,
+   with up to 3 attempts per round on transient failures. The keeper actor
+   refuses any other slot, and the local prover refuses healthy positions
+   before any transaction is sent (`exchange/server/worker.mjs`,
+   `exchange/server/README.md`). If Keeper B liquidates first, your close is
    refused on chain and the UI says so.
 
 ### What this is, and what it discloses
@@ -84,23 +152,68 @@ root, with the existing maker, oracle, keepers, mock token, and proving keys
   (Keeper A and Keeper B, both run by the operator) can decrypt the full
   opening, including margin and blinder. The browser never sends margin, the
   blinder, or the witness to the coordinator in plaintext. The `/api` request
-  bodies are built from allowlists (`exchange/src/protocol/api.js:1-6`).
+  bodies are built from allowlists (`exchange/src/protocol/api.js`), and the
+  server rejects unknown fields.
 - **Settlement inference.** A close or liquidation publishes the refund and
   any bad debt. Together with size, entry, and the public mark, this lets an
   observer infer margin after settlement.
-- **Browser-local custody, no recovery.** The signing key, the session bearer,
-  and the sealed opening (AES-GCM under a non-extractable vault key,
-  `exchange/src/protocol/store.js:1-5`) exist only in this browser origin.
-  There is no export. If you clear site data or switch browser or profile, you
-  lose the ability to sign deposits, withdrawals, and voluntary closes. The
-  keepers can still liquidate from their encrypted copy if the mark crosses
+- **Browser-local custody, no recovery.** The signing key and the sealed
+  opening (AES-GCM under a non-extractable vault key,
+  `exchange/src/protocol/store.js`) exist only in this browser origin. There
+  is no export. If you clear site data or switch browser or profile, you lose
+  the ability to sign deposits, withdrawals, and voluntary closes. The keepers
+  can still liquidate from their encrypted copy if the mark crosses
   liquidation.
+
+## Session enrollment
+
+`POST /api/sessions` takes exactly `{ "public_key", "proof" }`
+(`exchange/server/README.md`, `exchange/src/protocol/signer.js`):
+
+- `proof` is the browser key's Ed25519 signature over the UTF-8 string
+  `xythum:exchange:session:v1:testnet:` followed by `public_key`, in canonical
+  padded Base64. The coordinator verifies it before it reads any other state
+  or spends anything. A missing or wrong proof gets `400`/`401 invalid_proof`
+  and learns nothing about whether that key has a session.
+- The bearer is derived from the signature:
+  `SHA-256("xythum:exchange:bearer:v1:" ‖ signature)`, base64url. The
+  coordinator stores only its SHA-256 and logs neither the proof nor the
+  bearer. Ed25519 signing is deterministic, so the key holder can re-derive
+  both.
+- Posting the same proof again resumes an interrupted setup. Once the session
+  is ready, it returns the same session with no new transaction and no quota
+  charge. A different valid proof for a bound session gets `409`.
+- The proof works as a bearer secret in its own right. Serve over TLS and keep
+  request bodies out of proxy logs.
+
+## Proving-key pins
+
+The browser checks keys in two layers (`exchange/src/protocol/prover-core.js`,
+`prover-pins.js`):
+
+1. **Full proving-key pin.** The worker downloads the complete uncompressed
+   `open.pk` or `close.pk`. It compares the SHA-256 of the full file with a
+   pinned release digest before any byte reaches the WASM prover. The
+   defaults are compiled in. A deployment can override them at build time
+   with `VITE_XYTHUM_OPEN_PK_SHA256` and `VITE_XYTHUM_CLOSE_PK_SHA256`
+   (64 lowercase hex digits). A malformed override fails closed.
+2. **On-chain verifying-key fingerprint.** The WASM prover then decodes the
+   embedded verifying key and compares its SHA-256 with the market's
+   `get_config()` `open_vk_sha256` / `close_vk_sha256`.
+
+At startup the coordinator requires `open.pk`, `close.pk`, and
+`liquidation.pk` in `XYTHUM_PROVING_DIR` (default `.testnet/proving/`). It
+re-derives the verifying keys and refuses to start unless they match
+`PINNED_VK_FINGERPRINTS` in `exchange/server/config.mjs`. If you set
+`XYTHUM_MARKET_WASM_SHA256`, it also checks the market Wasm. Only
+`/api/proving/open.pk` and `/api/proving/close.pk` are served. Compressed
+keys (`xythum-browser-keys compress`) are not served.
 
 ## Operator setup (local development)
 
 **Requirements**
 
-- Node **22.12 or later** and npm.
+- Node **22.12 or later** and npm (`exchange/package.json` `engines`).
 - rustup with the pinned **Rust 1.95.0** toolchain and the
   `wasm32-unknown-unknown` target (see
   [`rust-toolchain.toml`](../rust-toolchain.toml)), plus cargo-near 0.23.0.
@@ -113,10 +226,9 @@ root, with the existing maker, oracle, keepers, mock token, and proving keys
   - `NEAR_KEEPER_{A,B}_ACK_{PUBLIC,SECRET}`;
   - `NEAR_KEEPER_{A,B}_ENCRYPTION_{PUBLIC,SECRET}`.
 
-  Do not create, edit, or print these values
-  (`exchange/server/testnet.mjs:171-281`). The existing `MARKET` key is used
-  only to deploy and lock new session markets, and it is deleted from each
-  new market in the same receipt.
+  Do not create, edit, or print these values. The existing `MARKET` key is
+  used only to deploy and lock new session markets, and it is deleted from
+  each new market in the same batch.
 
 **Install and build**, from the repository root:
 
@@ -129,13 +241,15 @@ cargo build --locked --manifest-path prover/Cargo.toml --release
 ```
 
 The native build provides `target/near/xythum_near_perps.wasm`, which the
-coordinator deploys per session (`config.mjs:95`). It also provides the native
-prover that the keeper actors use (`tests/actor.mjs`, through
-`exchange/server/actors.mjs`).
+coordinator deploys per session. It also provides the native prover that the
+keeper actors use (`tests/actor.mjs`, through `exchange/server/actors.mjs`).
 
 **Browser prover** (wasm-bindgen 0.2.130, installed under
-`prover/target/tools` if missing). Both scripts `cd` into `prover/` before
-writing their output, so pass an **absolute** output directory:
+`prover/target/tools` if missing). The scripts' own default output is
+`prover/target/browser/pkg/`. The exchange instead expects the output in
+Vite's default public directory, `exchange/public/prover/`
+(`exchange/vite.config.js`). Both scripts `cd` into `prover/` before writing,
+so pass an **absolute** output directory:
 
 ```text
 bash prover/browser/build.sh "$PWD/exchange/public/prover"
@@ -143,39 +257,24 @@ powershell -File prover/browser/build.ps1 -OutDir "$PWD\exchange\public\prover"
 ```
 
 The output is `xythum_prover.js`, `xythum_prover_bg.wasm`, the `.d.ts` files,
-and `snippets/`, all Git-ignored. The worker imports
-`/prover/xythum_prover.js` from its own origin
-(`exchange/src/protocol/prover.worker.js:93`). Optionally, run the synthetic
-smoke test with `node prover/browser/smoke.mjs exchange/public/prover`. It
-creates fresh throwaway keys and never reads `.env` or `.testnet`.
+and `snippets/`, all Git-ignored. Keep `snippets/` next to the module. Vite
+serves the directory unmodified at same-origin `/prover/` in dev and preview,
+and copies it verbatim into `exchange/dist`. The proving worker imports
+`/prover/xythum_prover.js`. For the synthetic smoke tests, see
+[`prover/browser/README.md`](../prover/browser/README.md). They create fresh
+throwaway keys and never read `.env` or `.testnet`.
 
-**Proving inputs and verification.** The coordinator serves exactly two
-public files from `XYTHUM_PROVING_DIR` (default `.testnet/proving/`):
-`/api/proving/open.pk` and `/api/proving/close.pk`
-(`exchange/server/app.mjs:20`).
-
-- **At startup**, the coordinator requires `open.pk`, `close.pk`, and
-  `liquidation.pk`. It re-derives the verifying keys and refuses to start
-  unless their SHA-256 values match the deployment pins in
-  `PINNED_VK_FINGERPRINTS` (`config.mjs:16-20`, `server.mjs:141-148`). If you
-  set `XYTHUM_MARKET_WASM_SHA256`, it also checks the market Wasm.
-- **In the browser**, the worker passes the on-chain `get_config()`
-  `open_vk_sha256` and `close_vk_sha256` into the prover with the downloaded
-  key.
-- **To inspect a key by hand**, run
-  `prover/target/release/xythum-browser-keys info .testnet/proving/open.pk`.
-  It prints `vk_sha256`. The `compress` subcommand writes new
-  `*.compressed.pk` files plus their download `sha256` and refuses to
-  overwrite (`prover/browser/keys.rs:1-15`). The server does not serve
-  compressed keys yet.
-
-**Run.** Session creation is off unless you set a quota.
+**Run.** Session creation stays off until you set a quota. The quota below
+(3) is only an example; any value from 1 to 50 works. The maker-vault override
+is optional. It funds each new market's maker vault with 1,000 mUSDC instead
+of the default 601, which leaves room for repeated open/close tests. The value
+is in cents.
 
 ```text
 # terminal 1, repository root (bash)
-XYTHUM_SESSION_QUOTA=2 XYTHUM_ROOT_RESERVE_NEAR=5 node exchange/server/server.mjs
+XYTHUM_SESSION_QUOTA=3 XYTHUM_ROOT_RESERVE_NEAR=5 XYTHUM_MAKER_VAULT_MUSDC=100000 node exchange/server/server.mjs
 # PowerShell
-$env:XYTHUM_SESSION_QUOTA='2'; $env:XYTHUM_ROOT_RESERVE_NEAR='5'; node exchange/server/server.mjs
+$env:XYTHUM_SESSION_QUOTA='3'; $env:XYTHUM_ROOT_RESERVE_NEAR='5'; $env:XYTHUM_MAKER_VAULT_MUSDC='100000'; node exchange/server/server.mjs
 
 # terminal 2, dev UI with /api proxied to 127.0.0.1:8790
 cd exchange; npx vite
@@ -183,7 +282,8 @@ cd exchange; npx vite
 cd exchange; npx vite build        # -> exchange/dist, served when XYTHUM_SERVE_DIST != 0
 ```
 
-These are the coordinator's settings (`exchange/server/config.mjs:51-114`).
+These are the main coordinator settings (`exchange/server/config.mjs`; the
+full table is in [`exchange/server/README.md`](../exchange/server/README.md)).
 Each spending value has a hard cap:
 
 | Variable | Default | Bound |
@@ -191,27 +291,14 @@ Each spending value has a hard cap:
 | `XYTHUM_SESSION_QUOTA` | unset = no new sessions | 1–50 total sessions |
 | `XYTHUM_ROOT_RESERVE_NEAR` | 1 | ≤ 100. New sessions are refused if this much test NEAR would not remain on the root. |
 | `XYTHUM_TRADER_NEAR` | 0.5 | ≤ 2 |
-| `XYTHUM_TRADER_MUSDC` / `XYTHUM_MAKER_VAULT_MUSDC` | 60,000 / 60,100 cents | ≤ 2× / 4× |
+| `XYTHUM_TRADER_MUSDC` | 60,000 cents | 60,000–120,000 |
+| `XYTHUM_MAKER_VAULT_MUSDC` | 60,100 cents | 60,100–240,400 |
 | `XYTHUM_SETUP_QUEUE`, `XYTHUM_APPROVALS_PER_SESSION`, `XYTHUM_MARKS_PER_SESSION` | 4, 20, 100 | 16, 200, 1,000 |
 | `XYTHUM_SESSION_DIR` | `.testnet/exchange-sessions` | must differ from `.testnet` and the proving directory |
 
 `GET /api/health` reports the session count and the quota. Session records
 hold public chain data and a SHA-256 of the bearer only
-(`exchange/server/store.mjs:1-3`).
-
-## Pending browser enrollment addendum
-
-Today `POST /api/sessions` accepts only `{ "public_key" }`
-(`coordinator.mjs:135`). The expected addendum, which has not been
-implemented, has two parts:
-
-- **Proof of key possession.** The browser posts `public_key` together with
-  an Ed25519 signature over a coordinator challenge, made with that key. The
-  coordinator verifies the signature before it spends anything.
-- **Pinned proving artifact.** The browser pins the digest of the public
-  proving artifact it downloads, in addition to the on-chain `vk_sha256`
-  check. For example, it could use the download `sha256` reported by
-  `xythum-browser-keys compress`.
+(`exchange/server/store.mjs`).
 
 ## Deploying later (not done)
 
@@ -220,27 +307,36 @@ constraints a deployment must meet:
 
 - **One instance.** Run one always-on coordinator process. The Keeper B
   worker runs inside it, so it must keep running with no browser connected.
-  The store also takes an exclusive pid lock (`store.mjs:272-290`), so a
-  second instance on the same directory will not start.
+  The store takes an exclusive pid lock, so a second instance on the same
+  directory will not start.
 - **One persistent state volume.** Mount a single private volume holding the
   session directory, the proving directory, and the existing `.env`. If the
   session directory is lost, so are the quota accounting and the keeper
   arming state.
 - **Hosted mode.** Hosted mode needs `XYTHUM_ALLOW_HOSTED=1` and an IP
-  address in `XYTHUM_SERVER_HOST` (`config.mjs:52-57`). The creation cooldown
-  then defaults to 60 seconds per client address.
+  address in `XYTHUM_SERVER_HOST`. The creation cooldown then defaults to
+  60 seconds per client address. Hosted mode limits creation by socket address
+  only, so put an authenticating proxy in front before exposing it.
 - **Same origin over HTTPS.** Serve `exchange/dist` and `/api` from the same
   origin behind HTTPS. The worker fetches the prover module and proving keys
   from its own origin, and WebCrypto needs a secure context.
 
-## Pending work
+## Next layers (not started)
 
-- An end-to-end browser run on testnet: account, deposit, open, receipts,
-  mark, Keeper B, close, and withdraw. It should be recorded in a new
-  evidence file. Nothing is claimed until that exists.
-- Public hosting.
-- The enrollment addendum above.
-- Optionally, serving compressed proving keys.
+Each of these is a separate layer on top of layer 1. None of them changes the
+tagged layers, and none is claimed until it has its own testnet evidence.
+
+- **Shorts.** A short side in the proof statements and the settlement model.
+  This is expected to need new proving keys and a new market Wasm.
+- **Margin edits.** Adding margin to, or removing it from, an open position
+  without closing it.
+- **Multiple slots.** More than one open position per trader on a market.
+- **Shielded notes.** Private collateral notes in place of the public mUSDC
+  claim, so deposits and withdrawals no longer reveal amounts.
+
+Also still open: public hosting, an independent-operator trial with separate
+keys for the maker, oracle, and keepers, proving on a real phone, and,
+optionally, serving compressed proving keys.
 
 ## Design provenance
 
@@ -256,8 +352,8 @@ The user owns the original Xythum EVM DEX,
 - the proof-progress messaging;
 - the HSL palette.
 
-The UI header (`exchange/src/ui/exchange.js:3-12`) and the stylesheet header
-(`exchange/src/ui/exchange.css:1-5`) list the source files. React, wagmi,
-TradingView, and wallet code were not carried over. **No Solidity contracts
-or circuits from the EVM baseline were reused.** The NEAR clearing contract and
-proof statements are new ([`docs/SPEC.md`](SPEC.md#baseline-and-scope)).
+The headers of `exchange/src/ui/exchange.js` and `exchange/src/ui/exchange.css`
+list the source files. React, wagmi, TradingView, and wallet code were not
+carried over. **No Solidity contracts or circuits from the EVM baseline were
+reused.** The NEAR clearing contract and proof statements are new
+([`docs/SPEC.md`](SPEC.md#baseline-and-scope)).
