@@ -447,6 +447,61 @@ test('a stale oracle is refreshed at the same price for open without a user mark
   assert.deepEqual(methodsCalled(w, IDS.trader), ['ft_transfer_call', 'stage_position', 'open']);
 });
 
+test('a no-write refresh keeps a still-valid oracle when the server refreshes only after 900 blocks', async () => {
+  const world = await createWorld();
+  const { w } = world;
+  const { controller, last, marksBefore, active } = await openWithoutMarks(world);
+  w.refreshAfterBlocks = 900; // highest allowed XYTHUM_REFRESH_AFTER_BLOCKS
+  const before = { ...w.oracle };
+  const publishes = oraclePublishes(w).length;
+  w.height += 750; // past the staging threshold, well inside on-chain validity
+
+  assert.equal(await controller.onClose(), true, last().error);
+  assert.equal(refreshes(w).length, 1, 'asked once, server declined to write');
+  assert.equal(oraclePublishes(w).length, publishes, 'no oracle write');
+  assert.equal(marks(w), marksBefore);
+  assert.equal(closeJobs(world).length, 1);
+  assert.equal(closeJobs(world)[0].input.round, before.round, 'proved against the existing final round');
+  const [close] = w.calls.filter((c) => c.method === 'close');
+  assert.deepEqual([close.args.nonce, close.args.root, close.args.round], [active.nonce, active.commitment, before.round]);
+  assert.equal(last().active, null);
+});
+
+test('a no-write refresh near staleness is refused before proving or sending', async () => {
+  const world = await createWorld();
+  const { w } = world;
+  const { controller, last, marksBefore } = await openWithoutMarks(world);
+  w.refreshAfterBlocks = 1_000; // server declines to write at this age
+  const publishes = oraclePublishes(w).length;
+  w.height += 980; // still valid on chain, but without proving headroom
+
+  assert.equal(await controller.onClose(), false);
+  assert.match(last().error, /near staleness/);
+  assert.equal(refreshes(w).length, 1);
+  assert.equal(oraclePublishes(w).length, publishes);
+  assert.equal(marks(w), marksBefore);
+  assert.equal(closeJobs(world).length, 0, 'nothing proven');
+  assert.equal(w.calls.filter((c) => c.method === 'close').length, 0, 'nothing sent');
+  assert.ok(last().active);
+});
+
+test('a refresh receipt whose round does not advance to a fresh final oracle is refused', async () => {
+  const world = await createWorld();
+  const { w } = world;
+  const { controller, last } = await openWithoutMarks(world);
+  const markHash = last().receipts.filter((r) => r.label === 'mark').at(-1)?.hash;
+  assert.ok(markHash, 'a verified oracle publish from the earlier mark');
+  w.hooks.api = async (route) => (route === 'POST /session/refresh'
+    ? new Response(JSON.stringify({ oracle: { ...w.oracle }, receipt: { label: 'oracle refresh', hash: markHash } }), { status: 200 })
+    : null);
+  w.height += 750;
+
+  assert.equal(await controller.onClose(), false);
+  assert.match(last().error, /still stale after a liveness refresh/);
+  assert.equal(closeJobs(world).length, 0);
+  assert.equal(w.calls.filter((c) => c.method === 'close').length, 0);
+});
+
 test('close retries a round that changed while proving, without a user mark, for the same slot', async () => {
   const world = await createWorld();
   const { w } = world;

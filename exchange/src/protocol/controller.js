@@ -30,6 +30,13 @@ const MAX_MARKS = 200;
 const MAX_RECEIPTS = 100;
 /** Refresh the oracle before staging when it is older than this. */
 const STAGE_FRESHNESS_BLOCKS = 600;
+/**
+ * Validity an existing round must keep when the liveness refresh declines to
+ * write. The server may be configured to refresh only past an age above
+ * `STAGE_FRESHNESS_BLOCKS` (up to 900), so a no-write answer is accepted
+ * while the final oracle is at most `ORACLE_FRESHNESS_BLOCKS` minus this old.
+ */
+const NO_REFRESH_HEADROOM_BLOCKS = 80;
 /** Oracle validity a close proof must still have at the final height after proving. */
 const CLOSE_MARGIN_BLOCKS = 30;
 /** Prove-and-send attempts for one close while the oracle round moves. */
@@ -516,11 +523,18 @@ export class ExchangeController {
    * sufficiently fresh final oracle is used as it is; an old one is renewed
    * through the server's liveness refresh (same price and funding under a
    * new round, outside the user mark quota), never through a test mark.
+   *
+   * The server refreshes only past its own configured age, which may exceed
+   * `maxAge`. When it writes, the new round must be at most `maxAge` old at
+   * the final height. When it declines to write, the existing final round is
+   * accepted only with `NO_REFRESH_HEADROOM_BLOCKS` of on-chain validity left.
+   * Callers still recheck round and age after proving.
    */
   async freshChain(chain = null, maxAge = STAGE_FRESHNESS_BLOCKS) {
     chain ??= await this.refresh();
     if (!chain.oracle) throw new Error('no oracle mark yet; publish a test mark first');
     if (chain.height - chain.oracle.height <= maxAge) return chain;
+    const staleRound = chain.oracle.round;
     this.progress('Refreshing the stale oracle round');
     const { oracle, receipt } = await this.api.refreshOracle();
     if (receipt) await this.verifyServerReceipt(receipt, this.ctx.config.oracle_id, 'publish_oracle');
@@ -529,8 +543,14 @@ export class ExchangeController {
       return o && o.round >= oracle.round ? o : null;
     });
     chain = await this.refresh();
-    if (!chain.oracle || chain.height - chain.oracle.height > maxAge) {
-      throw new Error('the finalized oracle is still stale after a liveness refresh; try again shortly');
+    if (!chain.oracle) throw new Error('the finalized oracle is missing after a liveness refresh');
+    const age = chain.height - chain.oracle.height;
+    if (receipt) {
+      if (chain.oracle.round <= staleRound || age > maxAge) {
+        throw new Error('the finalized oracle is still stale after a liveness refresh; try again shortly');
+      }
+    } else if (age > M.ORACLE_FRESHNESS_BLOCKS - NO_REFRESH_HEADROOM_BLOCKS) {
+      throw new Error('the oracle is near staleness and the server declined to refresh it; try again shortly');
     }
     return chain;
   }
