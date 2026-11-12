@@ -1,5 +1,7 @@
-//! Sandbox-only mock NEP-141 token (`mUSDC`, 2 decimals). It has no backing
-//! asset. The whole supply is minted to `owner_id` at initialization.
+//! Mock NEP-141 demo test asset (`mUSDC`, 2 decimals) for NEAR Sandbox and
+//! the testnet demo. It is synthetic, has no backing asset and no value. The
+//! whole supply is minted to `owner_id` at initialization; there is no
+//! further minting.
 
 use near_contract_standards::fungible_token::events::FtMint;
 use near_contract_standards::fungible_token::metadata::{
@@ -14,7 +16,7 @@ use near_contract_standards::storage_management::{
 use near_sdk::json_types::U128;
 use near_sdk::{AccountId, NearToken, PanicOnDefault, PromiseOrValue, log, near};
 
-pub const MOCK_NAME: &str = "Mock USDC (sandbox only)";
+pub const MOCK_NAME: &str = "Mock USDC (demo test asset, no value)";
 pub const MOCK_SYMBOL: &str = "mUSDC";
 pub const MOCK_DECIMALS: u8 = 2;
 
@@ -163,6 +165,7 @@ mod tests {
         let m = c.ft_metadata();
         assert_eq!(m.symbol, "mUSDC");
         assert_eq!(m.decimals, 2);
+        assert!(m.name.contains("Mock") && m.name.contains("no value"));
         m.assert_valid();
     }
 
