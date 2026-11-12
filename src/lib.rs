@@ -320,6 +320,7 @@ mod clearing {
         pub nonce: u32,
         pub commitment: Base64VecU8,
         pub quote_terms: Base64VecU8,
+        pub open_price_ticks: u32,
         pub expires_at: u32,
     }
 
@@ -641,6 +642,7 @@ mod clearing {
             nonce: u32,
             commitment: Base64VecU8,
             quote_terms: Base64VecU8,
+            open_price_ticks: u32,
             expires_at: u32,
         ) {
             require!(
@@ -658,7 +660,8 @@ mod clearing {
             require!(
                 pending.slot.nonce == nonce
                     && pending.slot.commitment == commitment
-                    && pending.slot.quote_terms == quote_terms,
+                    && pending.slot.quote_terms == quote_terms
+                    && pending.slot.open_price_ticks == open_price_ticks,
                 ERR_PENDING_MISMATCH
             );
             pending.quote_expires_at = Some(expires_at);
@@ -912,6 +915,7 @@ mod clearing {
                 nonce: p.slot.nonce,
                 commitment: p.slot.commitment.to_vec().into(),
                 quote_terms: p.slot.quote_terms.to_vec().into(),
+                open_price_ticks: p.slot.open_price_ticks,
                 expires_at: p.quote_expires_at?,
             })
         }
@@ -1289,7 +1293,8 @@ mod clearing {
 
         fn approve(c: &mut Contract, nonce: u32, commit: &[u8; 32], quote: &[u8; 32], h: u64) {
             ctx(maker(), h);
-            c.approve_quote(nonce, b64(commit), b64(quote), 500);
+            let mark = c.pending.as_ref().unwrap().slot.open_price_ticks;
+            c.approve_quote(nonce, b64(commit), b64(quote), mark, 500);
         }
 
         fn stage_and_approve(c: &mut Contract, nonce: u32) {
@@ -1795,7 +1800,7 @@ mod clearing {
             });
             ctx(maker(), 110);
             assert_rejects(&mut c, ERR_NO_PENDING, |c| {
-                c.approve_quote(1, commit(), quote(), 500)
+                c.approve_quote(1, commit(), quote(), 10_000, 500)
             });
 
             ctx(trader(), 110);
@@ -1808,26 +1813,29 @@ mod clearing {
 
             ctx(trader(), 110);
             assert_rejects(&mut c, ERR_NOT_MAKER, |c| {
-                c.approve_quote(1, commit(), quote(), 500)
+                c.approve_quote(1, commit(), quote(), 10_000, 500)
             });
             ctx(maker(), 110);
             assert_rejects(&mut c, ERR_PENDING_MISMATCH, |c| {
-                c.approve_quote(2, commit(), quote(), 500)
+                c.approve_quote(2, commit(), quote(), 10_000, 500)
             });
             assert_rejects(&mut c, ERR_PENDING_MISMATCH, |c| {
-                c.approve_quote(1, vec![1; 32].into(), quote(), 500)
+                c.approve_quote(1, vec![1; 32].into(), quote(), 10_000, 500)
             });
             // Tampered quote terms digest.
             assert_rejects(&mut c, ERR_PENDING_MISMATCH, |c| {
-                c.approve_quote(1, commit(), b64(&QUOTE2), 500)
+                c.approve_quote(1, commit(), b64(&QUOTE2), 10_000, 500)
             });
             assert_rejects(&mut c, ERR_QUOTE_TERMS_LEN, |c| {
-                c.approve_quote(1, commit(), vec![0; 31].into(), 500)
+                c.approve_quote(1, commit(), vec![0; 31].into(), 10_000, 500)
             });
             assert_rejects(&mut c, ERR_EXPIRY_NOT_FUTURE, |c| {
-                c.approve_quote(1, commit(), quote(), 110)
+                c.approve_quote(1, commit(), quote(), 10_000, 110)
             });
-            c.approve_quote(1, commit(), quote(), 111);
+            assert_rejects(&mut c, ERR_PENDING_MISMATCH, |c| {
+                c.approve_quote(1, commit(), quote(), 9_999, 500)
+            });
+            c.approve_quote(1, commit(), quote(), 10_000, 111);
             let q = c.get_quote().unwrap();
             assert_eq!((q.nonce, q.expires_at), (1, 111));
             assert_eq!(q.quote_terms.0, QUOTE.to_vec());
@@ -1935,7 +1943,7 @@ mod clearing {
             // Freshness: 1000 blocks inclusive (oracle at 105).
             let mut stale = ready_to_open();
             ctx(maker(), 111);
-            stale.approve_quote(1, commit(), b64(&QUOTE), 5_000);
+            stale.approve_quote(1, commit(), b64(&QUOTE), 10_000, 5_000);
             ctx(trader(), 1_106);
             assert_rejects(&mut stale, ERR_ORACLE_STALE, |c| {
                 c.open(1, commit(), good.clone(), proof())
@@ -2246,7 +2254,7 @@ mod clearing {
             assert_eq!(l.maker_vault, 150_000);
             ctx(maker(), 202);
             assert_rejects(&mut d, ERR_HALTED, |c| {
-                c.approve_quote(2, b64(&COMMIT), b64(&QUOTE), 500)
+                c.approve_quote(2, b64(&COMMIT), b64(&QUOTE), 10_000, 500)
             });
             ctx(trader(), 202);
             assert_rejects(&mut d, ERR_HALTED, |c| {

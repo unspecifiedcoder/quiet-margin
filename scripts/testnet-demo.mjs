@@ -8,7 +8,7 @@ import { actor, FULL_GAS, makerApproval, prover, txEvidence } from '../tests/act
 import { connectChain, demoAccounts, loadDemoEnv, TESTNET_DIR, TESTNET_RPC, viewFinal, waitFinal } from './testnet-client.mjs';
 
 const command = process.argv[2];
-assert.ok(['deploy', 'run'].includes(command), 'use deploy or run');
+assert.ok(['deploy', 'run', 'resume-active'].includes(command), 'use deploy, run, or resume-active');
 const { env, roles } = loadDemoEnv();
 const chain = await connectChain(TESTNET_RPC, true);
 const accounts = await demoAccounts(chain, roles);
@@ -34,14 +34,26 @@ async function call(account, target, method, args, options) {
   const result = await account.callRaw(target, method, args, { gas: FULL_GAS, ...options });
   assert.ok(result.succeeded && result.receiptFailures.length === 0,
     method + ' failed: ' + JSON.stringify(result.failures));
-  await waitFinal(chain, result);
+  try {
+    await waitFinal(chain, result);
+  } catch (error) {
+    console.error('Check testnet transaction ' + result.transactionReceipt.hash);
+    throw error;
+  }
   return txEvidence(result);
 }
 
-function loadProofKeys(create) {
+async function loadProofKeys(create) {
   if (existsSync(provingDir)) return prover('keys', provingDir);
   assert.ok(create, 'the deployment proving keys are missing');
-  return prover('setup', provingDir);
+  const staged = await mkdtemp(join(TESTNET_DIR, 'proving-build-'));
+  try {
+    const keys = prover('setup', staged);
+    await rename(staged, provingDir);
+    return keys;
+  } finally {
+    await rm(staged, { recursive: true, force: true });
+  }
 }
 
 async function assertConfig(keys) {
@@ -76,7 +88,7 @@ async function deploy(account, wasm, method, args) {
 }
 
 async function deployDemo() {
-  const keys = loadProofKeys(true);
+  const keys = await loadProofKeys(true);
   const wasm = await readFile(process.env.MARKET_WASM ?? 'target/near/xythum_near_perps.wasm');
   const mock = await readFile(process.env.MOCK_TOKEN_WASM ?? 'target/mock/xythum_near_perps.wasm');
   let evidence;
@@ -124,7 +136,7 @@ async function deployDemo() {
 }
 
 async function runDemo() {
-  await assertConfig(loadProofKeys(false));
+  await assertConfig(await loadProofKeys(false));
   const ledger = () => view(market, 'get_ledger');
   const active = () => view(market, 'get_active');
   assert.equal(await active(), null, 'an active position must be settled before starting a new demo');
@@ -186,23 +198,8 @@ async function runDemo() {
     return current;
   };
 
-  const temp = await mkdtemp(join(tmpdir(), 'xythum-testnet-'));
-  try {
+  await withKeepers(async (keeperInput) => {
     const marketId = await view(market, 'get_market');
-    const keeperPaths = keepers.map((_, index) => join(temp, 'keeper-' + index + '.json'));
-    for (const [index, role] of keeperRoles.entries()) {
-      await writeFile(keeperPaths[index], JSON.stringify({
-        encryption: env['NEAR_' + role + '_ENCRYPTION_SECRET'],
-        signing: env['NEAR_' + role + '_ACK_SECRET'],
-        txKey: roles[role].key.toString(),
-      }), { flag: 'wx', mode: 0o600 });
-    }
-    const actorInput = {
-      testnet: true, rpcAddr: TESTNET_RPC, contractId: market.accountId, trader: trader.accountId, provingDir,
-    };
-    const keeperInput = (index) => ({
-      ...actorInput, accountId: keepers[index].accountId, keeperIndex: index, keyPath: keeperPaths[index],
-    });
     const admit = async (name, nonce, fundingCheckpoint, traderWitnessPath) => {
       const prepared = actor('prepare', {
         market: marketId, nonce, trader: trader.accountId, fundingCheckpoint, openPriceTicks: 10_000,
@@ -295,10 +292,62 @@ async function runDemo() {
     evidence.complete = true;
     await save();
     console.log('Verified testnet close, healthy refusal and cold Keeper B liquidation.');
+  });
+}
+
+const actorInput = {
+  testnet: true, rpcAddr: TESTNET_RPC, contractId: market.accountId, trader: trader.accountId, provingDir,
+};
+
+async function withKeepers(run) {
+  const temp = await mkdtemp(join(tmpdir(), 'xythum-testnet-'));
+  try {
+    const keeperPaths = keepers.map((_, index) => join(temp, 'keeper-' + index + '.json'));
+    for (const [index, role] of keeperRoles.entries()) {
+      await writeFile(keeperPaths[index], JSON.stringify({
+        encryption: env['NEAR_' + role + '_ENCRYPTION_SECRET'],
+        signing: env['NEAR_' + role + '_ACK_SECRET'],
+        txKey: roles[role].key.toString(),
+      }), { flag: 'wx', mode: 0o600 });
+    }
+    return await run((index) => ({
+      ...actorInput, accountId: keepers[index].accountId, keeperIndex: index, keyPath: keeperPaths[index],
+    }));
   } finally {
     await rm(temp, { recursive: true, force: true });
   }
 }
 
+async function resumeActive() {
+  await assertConfig(await loadProofKeys(false));
+  const active = await view(market, 'get_active');
+  assert.ok(active, 'there is no active testnet demo position');
+  const previous = await view(market, 'get_oracle');
+  const traderWitnessPath = join(TESTNET_DIR, 'witnesses', 'trader-' + active.nonce + '.witness.json');
+  const close = existsSync(traderWitnessPath);
+  const evidence = { network: 'testnet', market: market.accountId, nonce: active.nonce };
+  const evidenceFile = 'resume-' + active.nonce + '.json';
+
+  evidence.oracle = await call(oracle, market, 'publish_oracle', {
+    round: previous.round + 1, price_ticks: close ? 12_000 : 5200,
+    funding_cents: active.funding_checkpoint + 200,
+  });
+  await record(evidenceFile, evidence);
+  if (close) {
+    const proof = actor('prove-close', { ...actorInput, traderWitnessPath }).close;
+    evidence.settlement = await call(trader, market, 'close', proof);
+    await rm(traderWitnessPath);
+  } else {
+    await chain.manager.removeKey(trader.accountId);
+    await chain.manager.removeKey(keeperA.accountId);
+    evidence.settlement = (await withKeepers((keeperInput) => actor('liquidate', keeperInput(1)))).tx;
+  }
+  evidence.final_ledger = await view(market, 'get_ledger');
+  assert.equal(await view(market, 'get_active'), null);
+  await record(evidenceFile, evidence);
+  console.log('Settled testnet demo nonce ' + active.nonce + ' in ' + evidence.settlement.hash);
+}
+
 if (command === 'deploy') await deployDemo();
+else if (command === 'resume-active') await resumeActive();
 else await runDemo();

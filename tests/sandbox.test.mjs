@@ -240,7 +240,9 @@ test('funded close, cold keeper liquidation, and settlement race', { timeout: 60
     const tamperedPending = await view('get_pending');
     assert.throws(() => makerApproval(tamperedPending, prepared.offer, market, trader.accountId), /quote terms changed/);
     // A maker signature over another digest cannot substitute the open proof's terms.
-    await approve({ nonce, commitment, quote_terms: tamperedTerms });
+    await approve({
+      nonce, commitment, quote_terms: tamperedTerms, open_price_ticks: tamperedPending.open_price_ticks,
+    });
     await reject('tampered_quote_terms', trader, 'open', openArgs, /proof/i);
     await stage([ciphertexts[0], prepared.mismatched]);
     await quote();
@@ -414,8 +416,13 @@ test('funded close, cold keeper liquidation, and settlement race', { timeout: 60
     await success(gapTrader, gapMarket, 'stage_position',
       { ...gapTerms, ciphertexts: gapOpening.ciphertexts });
     const unhealthyBlock = await worker.provider.block({ finality: 'final' });
+    const obsoleteApproval = await maker.callRaw(gapMarket, 'approve_quote', {
+      ...gapTerms, open_price_ticks: 57, expires_at: unhealthyBlock.header.height + 500,
+    }, { gas: FULL_GAS });
+    assert.ok(obsoleteApproval.failed);
+    assert.match(JSON.stringify(obsoleteApproval.failures), /ERR_PENDING_MISMATCH/);
     await success(maker, gapMarket, 'approve_quote', {
-      ...gapTerms, expires_at: unhealthyBlock.header.height + 500,
+      ...gapTerms, open_price_ticks: 1, expires_at: unhealthyBlock.header.height + 500,
     });
     const unhealthyAcks = [0, 1].map((i) => actor('ack', gapKeeper(i)).signature);
     const unhealthyOpen = await gapTrader.callRaw(gapMarket, 'open', {
@@ -470,6 +477,7 @@ test('funded close, cold keeper liquidation, and settlement race', { timeout: 60
     evidence.risk_edges = {
       market: { id: gapId, account: gapMarket.accountId, deployment_id: gapDeployment },
       oracle_rounds: [gapEntry, unhealthyMark, reopenedGapOracle, equalOracle, gapOracle],
+      obsolete_approval: txEvidence(obsoleteApproval),
       unhealthy_open: txEvidence(unhealthyOpen),
       open: gapOpenTx,
       equality: txEvidence(equality),

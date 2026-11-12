@@ -37,8 +37,9 @@ same lots and entry and independently enforces risk and opening health.
   `quote_terms` alongside v1 fields. Both payloads retain the 144-byte
   envelope with the same 72-byte private preimage. An acknowledgment uses
   the v1 message layout with the prefix `xythum:keeper-ack:v2:`.
-- `approve_quote(nonce, commitment, quote_terms, expires_at)` authenticates
-  the maker, exact pending position and terms digests, and future height.
+- `approve_quote(nonce, commitment, quote_terms, open_price_ticks, expires_at)`
+  authenticates the maker, pending position and terms digests, expected
+  opening mark, and future height.
   Expiry is inclusive for open. Restaging discards the prior approval.
 - `open` keeps its v1 arguments and requires the latest fresh oracle to
   match the staged opening price and funding checkpoint. The contract

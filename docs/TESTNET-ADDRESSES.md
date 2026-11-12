@@ -19,6 +19,7 @@ queries.
 
 The project-root `.env` contains the account IDs, testnet signing keys,
 and both keepers' encryption and acknowledgment keys. It is Git-ignored.
+The provisioning journal `.testnet/accounts.json` records public access keys.
 The proving keys used by this deployment live in `.testnet/proving/` after
 deployment. Preserve `.env` and that directory together to rerun the demo
 with the same accounts and verifier. Keep the signing keys private.
@@ -46,3 +47,8 @@ The deployment command verifies any existing code and keys. The demo command
 opens and settles new positions on an empty, funded market and records its
 transactions in `.testnet/demo-<starting-nonce>.json`. Public deployment and
 fixture receipts will be recorded here after verification.
+
+If a run stops with an active built-in demo position, run
+`node scripts/testnet-demo.mjs resume-active` to settle it using the matching
+fixture and save a recovery journal. Settlement leaves the resulting balances
+claimable through `withdraw`.

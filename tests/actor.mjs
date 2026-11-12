@@ -47,7 +47,7 @@ export function prover(command, dir, input) {
   const result = spawnSync(bin, dir ? [command, dir] : [command], {
     input: input === undefined ? undefined : JSON.stringify(input),
     encoding: 'utf8',
-    timeout: 120_000,
+    timeout: command === 'setup' ? 300_000 : 120_000,
   });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(result.stderr.trim() || command + ' failed');
@@ -162,7 +162,10 @@ export function makerApproval(pending, offer, market, trader) {
   assert.ok(Math.abs(offer.entry_ticks - pending.open_price_ticks) * 100 <= pending.open_price_ticks,
     'quote is outside the demo maker price band');
   assert.equal(pending.quote_terms, quoteDigest(offer), 'maker quote terms changed');
-  return { nonce: pending.nonce, commitment: pending.commitment, quote_terms: pending.quote_terms };
+  return {
+    nonce: pending.nonce, commitment: pending.commitment,
+    quote_terms: pending.quote_terms, open_price_ticks: pending.open_price_ticks,
+  };
 }
 
 function prepare({ market, nonce, fundingCheckpoint, openPriceTicks, trader, recipients,
