@@ -6,8 +6,10 @@ import {
   diffieHellman, generateKeyPairSync, hkdfSync, randomBytes, sign,
 } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
-import { KeyPair, Worker } from 'near-workspaces';
-import near from 'near-api-js';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { KeyPair } from 'near-workspaces';
+import { connectChain, viewFinal, waitFinal } from '../scripts/testnet-client.mjs';
 
 export const FULL_GAS = 250_000_000_000_000n;
 
@@ -20,10 +22,28 @@ const le32 = (value) => {
 const bytes = (text) => Buffer.from(text, 'base64');
 const base64 = (value) => value.toString('base64');
 const label = (text) => Buffer.from(text, 'ascii');
+const actorPath = fileURLToPath(import.meta.url);
+
+export function actor(command, input, expectedError) {
+  const child = spawnSync(process.execPath, [actorPath, command], {
+    input: JSON.stringify(input),
+    encoding: 'utf8',
+    timeout: 130_000,
+  });
+  if (child.error) throw child.error;
+  if (expectedError) {
+    assert.equal(child.status, 1);
+    assert.match(child.stderr, expectedError);
+    return;
+  }
+  assert.equal(child.status, 0, child.stderr);
+  return JSON.parse(child.stdout);
+}
 
 export function prover(command, dir, input) {
-  const bin = process.env.PROVER_BIN;
-  assert.ok(bin, 'set PROVER_BIN to the built xythum-prover executable');
+  const suffix = process.platform === 'win32' ? '.exe' : '';
+  const bin = process.env.PROVER_BIN
+    ?? fileURLToPath(new URL('../prover/target/release/xythum-prover' + suffix, import.meta.url));
   const result = spawnSync(bin, dir ? [command, dir] : [command], {
     input: input === undefined ? undefined : JSON.stringify(input),
     encoding: 'utf8',
@@ -123,23 +143,54 @@ function decrypt(ciphertext, key, commitment) {
   }
 }
 
-function positionContext(market, nonce, trader) {
-  return base64(SHA(label('xythum:position:v1:'), bytes(market), le32(nonce), Buffer.from(trader)));
+export function positionContext(market, nonce, fundingCheckpoint, trader) {
+  return base64(SHA(
+    label('xythum:position:v2:'), bytes(market), le32(nonce), le32(fundingCheckpoint), Buffer.from(trader),
+  ));
 }
 
-function prepare({ market, nonce, trader, recipients, provingDir, fixture }) {
+function quoteDigest({ context, quote_blinder, size_lots, entry_ticks }) {
+  const terms = Buffer.alloc(4);
+  terms.writeUInt16LE(size_lots, 0);
+  terms.writeUInt16LE(entry_ticks, 2);
+  return base64(SHA(label('xythum:quote:v2:'), bytes(context), bytes(quote_blinder), terms));
+}
+
+export function makerApproval(pending, offer, market, trader) {
+  assert.equal(offer.context, positionContext(market, pending.nonce, pending.funding_checkpoint, trader));
+  assert.ok(offer.size_lots >= 1 && offer.size_lots <= 50);
+  assert.ok(Math.abs(offer.entry_ticks - pending.open_price_ticks) * 100 <= pending.open_price_ticks,
+    'quote is outside the demo maker price band');
+  assert.equal(pending.quote_terms, quoteDigest(offer), 'maker quote terms changed');
+  return { nonce: pending.nonce, commitment: pending.commitment, quote_terms: pending.quote_terms };
+}
+
+function prepare({ market, nonce, fundingCheckpoint, openPriceTicks, trader, recipients,
+  provingDir, fixture, traderWitnessPath }) {
   const witness = {
-    context: positionContext(market, nonce, trader),
+    context: positionContext(market, nonce, fundingCheckpoint, trader),
     size_lots: 10,
     entry_ticks: 10_000,
     margin_cents: 50_000,
     ...fixture,
     blinder: base64(randomBytes(32)),
   };
-  const opened = prover('prove-open', provingDir, witness);
+  const offer = {
+    context: witness.context,
+    size_lots: witness.size_lots,
+    entry_ticks: witness.entry_ticks,
+    quote_blinder: base64(randomBytes(32)),
+  };
+  const opened = prover('prove-open', provingDir, {
+    ...witness, quote_blinder: offer.quote_blinder, open_price_ticks: openPriceTicks,
+  });
+  assert.equal(opened.quote_terms, quoteDigest(offer));
   const ciphertexts = recipients.map((recipient) => encrypt(witness, recipient, opened.commitment));
   const mismatched = encrypt({ ...witness, margin_cents: witness.margin_cents + 1 }, recipients[1], opened.commitment);
-  return { ...opened, ciphertexts, mismatched };
+  if (traderWitnessPath) {
+    writeFileSync(traderWitnessPath, JSON.stringify(witness), { flag: 'wx', mode: 0o600 });
+  }
+  return { ...opened, ciphertexts, mismatched, offer };
 }
 
 async function act(command, input) {
@@ -147,37 +198,42 @@ async function act(command, input) {
   if (command === 'prepare') return prepare(input);
 
   const { rpcAddr, contractId, accountId, trader, keeperIndex, keyPath, provingDir } = input;
-  const { hostname, protocol } = new URL(rpcAddr);
-  assert.ok(hostname === '127.0.0.1' && protocol === 'http:', 'expected local Sandbox RPC');
-  const chain = await Worker.init({ network: 'custom', rpcAddr, keyStore: new near.keyStores.InMemoryKeyStore() });
+  const chain = await connectChain(rpcAddr, input.testnet ?? false);
   const contract = chain.rootAccount.getAccount(contractId);
-  const state = await contract.view(command === 'ack' ? 'get_pending' : 'get_active');
-  const market = await contract.view('get_market');
-  if (!state?.ciphertexts?.[keeperIndex]) throw new Error('missing keeper payload');
-  const keys = JSON.parse(readFileSync(keyPath, 'utf8'));
+  const view = (method) => input.testnet
+    ? viewFinal(chain, contractId, method)
+    : contract.view(method);
+  const state = await view(command === 'ack' ? 'get_pending' : 'get_active');
+  const market = await view('get_market');
+  if (!state) throw new Error(command === 'ack' ? 'missing keeper payload' : 'missing active position');
+
+  const isClose = command === 'prove-close';
+  const keys = isClose ? null : JSON.parse(readFileSync(keyPath, 'utf8'));
   const ciphertext = state.ciphertexts[keeperIndex];
-  const witness = decrypt(ciphertext, keys.encryption, state.commitment);
-  if (witness.context !== positionContext(market, state.nonce, trader)
+  const witness = isClose
+    ? JSON.parse(readFileSync(input.traderWitnessPath, 'utf8'))
+    : decrypt(ciphertext, keys.encryption, state.commitment);
+  if (witness.context !== positionContext(market, state.nonce, state.funding_checkpoint, trader)
     || prover('commit', undefined, witness).commitment !== state.commitment) {
-    throw new Error('keeper witness commitment mismatch');
+    throw new Error('witness commitment mismatch');
   }
 
   if (command === 'ack') {
     const message = Buffer.concat([
-      label('xythum:keeper-ack:v1:'), bytes(market), le32(state.nonce), bytes(state.commitment),
+      label('xythum:keeper-ack:v2:'), bytes(market), le32(state.nonce), bytes(state.commitment),
       SHA(bytes(ciphertext)), Buffer.from([keeperIndex]), le32(1),
     ]);
     return { signature: base64(sign(null, message, privateKey(keys.signing))) };
   }
 
-  const oracle = input.oracleOverride ?? await contract.view('get_oracle');
+  const oracle = input.oracleOverride ?? await view('get_oracle');
   assert.ok(!input.otherMarket || command === 'prove');
   const opening = input.otherMarket
-    ? { ...witness, context: positionContext(input.otherMarket, state.nonce, trader) }
+    ? { ...witness, context: positionContext(input.otherMarket, state.nonce, state.funding_checkpoint, trader) }
     : witness;
-  const generated = prover('prove-liquidation', provingDir, {
+  const generated = prover(isClose ? 'prove-close' : 'prove-liquidation', provingDir, {
     ...opening, round: oracle.round, price_ticks: oracle.price_ticks,
-    funding_cents: oracle.funding_cents,
+    funding_cents: oracle.funding_cents - state.funding_checkpoint,
   });
   if (input.otherMarket) assert.notEqual(generated.commitment, state.commitment);
   else assert.equal(generated.commitment, state.commitment);
@@ -186,6 +242,7 @@ async function act(command, input) {
     refund: generated.refund, bad_debt: generated.bad_debt, proof: generated.proof,
   };
   if (command === 'prove') return { liquidation, proving_ms: generated.proving_ms };
+  if (isClose) return { close: liquidation, proving_ms: generated.proving_ms };
 
   assert.equal(command, 'liquidate');
   assert.equal(input.oracleOverride, undefined);
@@ -193,10 +250,11 @@ async function act(command, input) {
   await keeper.setKey(KeyPair.fromString(keys.txKey));
   const tx = await keeper.callRaw(contract, 'liquidate', liquidation, { gas: FULL_GAS });
   assert.ok(tx.succeeded && tx.receiptFailures.length === 0, JSON.stringify(tx.status));
+  if (input.testnet) await waitFinal(chain, tx);
   return { liquidation, proving_ms: generated.proving_ms, tx: txEvidence(tx) };
 }
 
-if (process.argv[2]) {
+if (process.argv[1] && resolve(process.argv[1]) === actorPath) {
   // Keep the actor's stdout as one JSON value and put SDK receipt logs on stderr.
   globalThis.console = new Console({ stdout: process.stderr, stderr: process.stderr });
   try {
@@ -207,4 +265,3 @@ if (process.argv[2]) {
     process.exitCode = 1;
   }
 }
-

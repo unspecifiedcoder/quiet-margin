@@ -1,6 +1,6 @@
 # Xythum NEAR Perps
 
-Native NEAR Sandbox prototype for confidential BTC/mock-USDC liquidation.
+Native NEAR demo for confidential BTC/mock-USDC positions, funded voluntary close, and keeper liquidation.
 
 ## Run the Sandbox suite
 
@@ -21,6 +21,8 @@ It includes public proof and receipt data, Wasm and verifying-key hashes,
 timings, and ledger snapshots. Sandbox-only proving keys and keeper keys
 live in a temporary directory for the run. The fixture is synthetic.
 
-- [Sandbox specification](docs/SPEC.md)
+- [Funded market specification](docs/FUNDED-MARKET.md)
+- [Testnet addresses and local credential locations](docs/TESTNET-ADDRESSES.md)
+- [Original Sandbox specification](docs/SPEC.md)
 - [Build decisions](docs/DECISIONS.md)
 - [Verified Sandbox evidence](docs/SANDBOX-EVIDENCE.md)

@@ -7,6 +7,23 @@ if [[ "$(uname -s)" != Linux || "$(uname -m)" != x86_64 ]]; then
   exit 1
 fi
 
+mode="${1:-all}"
+if [[ $# -gt 1 || ( "$mode" != all && "$mode" != --sandbox-only && "$mode" != --rust-only ) ]]; then
+  echo 'Usage: bash scripts/sandbox.sh [--sandbox-only | --rust-only]' >&2
+  exit 2
+fi
+
+rust_tests() {
+  cargo test --locked --lib
+  cargo test --locked --lib --features mock-token
+  cargo test --locked --manifest-path prover/Cargo.toml --release
+}
+
+if [[ "$mode" == --rust-only ]]; then
+  rust_tests
+  exit 0
+fi
+
 tools="$PWD/.sandbox"
 mkdir -p "$tools"
 export PATH="$tools/cargo-near:$PATH"
@@ -50,7 +67,6 @@ cargo near build non-reproducible-wasm --locked --no-abi
 cargo near build non-reproducible-wasm --locked --no-abi --features mock-token --out-dir target/mock
 cargo build --locked --manifest-path prover/Cargo.toml --release
 npm run sandbox
-cargo test --locked --lib
-cargo test --locked --lib --features mock-token
-cargo test --locked --manifest-path prover/Cargo.toml --release
-
+if [[ "$mode" == all ]]; then
+  rust_tests
+fi
