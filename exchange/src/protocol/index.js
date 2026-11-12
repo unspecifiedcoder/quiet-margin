@@ -6,11 +6,17 @@ import { ProverClient } from './prover.js';
 import { indexedDbBackend, Store } from './store.js';
 
 export { ExchangeController } from './controller.js';
+export { burnerSignRequest, createBurnerWallet, importBurnerWallet, unlockBurnerStore } from './burner-wallet.js';
 
-export function createExchange({ onState, allowSandbox = false } = {}) {
+/**
+ * `store` is optional: omit it for the legacy Start session browser key (the
+ * `xythum-exchange` database), or pass `(await unlockBurnerStore(wallet,
+ * location.origin)).store` to trade with that burner's trading wallet.
+ */
+export function createExchange({ onState, allowSandbox = false, store } = {}) {
   const controller = new ExchangeController({
     api: new Api({ base: '/api' }),
-    store: new Store(indexedDbBackend()),
+    store: store ?? new Store(indexedDbBackend()),
     prover: new ProverClient(),
     allowSandbox,
     onState,
