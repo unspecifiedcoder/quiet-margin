@@ -16,7 +16,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 
 const KEEPER_INDEX = 1;
@@ -141,8 +141,14 @@ function generateKeys(accountId) {
 // current user, SYSTEM or Administrators; output that cannot be parsed fails.
 const windowsUser = () => process.env.USERDOMAIN + '\\' + process.env.USERNAME;
 
-function windowsAclCheck(file,
-  fix = 'restrict it with: icacls "' + file + '" /inheritance:r /grant:r "' + windowsUser() + ':F"') {
+// /inheritance:r drops inherited entries and /grant:r replaces only the
+// user's own explicit grant; any other explicit grant stays until removed.
+const windowsAclFix = (target, rights) => 'icacls "' + target + '" /inheritance:r /grant:r "' + windowsUser()
+  + ':' + rights + '" removes inherited entries and resets your own grant but keeps other explicit grants;'
+  + ' remove each remaining listed account with: icacls "' + target + '" /remove:g "<account>"'
+  + ', then recheck with: icacls "' + target + '"';
+
+function windowsAclCheck(file, fix = 'to restrict it, ' + windowsAclFix(file, 'F')) {
   const child = spawnSync('icacls', [file], { encoding: 'utf8', windowsHide: true, timeout: 30_000 });
   assert.ok(!child.error && child.status === 0, 'icacls could not read the key file ACL; ' + fix);
   const trusted = [windowsUser(), ...WINDOWS_TRUSTED].map((name) => name.toLowerCase());
@@ -201,7 +207,18 @@ function validateManifest(manifest, coordinator) {
   const tx = nearPublicKey(manifest.tx_public_key);
   const encryption = canonicalBase64(manifest.encryption_key, 44, 'encryption_key');
   assert.ok(encryption.subarray(0, 12).equals(X25519_SPKI), 'encryption_key must be an X25519 SPKI key');
-  assert.equal(createPublicKey({ key: encryption, type: 'spki', format: 'der' }).asymmetricKeyType, 'x25519');
+  const recipient = createPublicKey({ key: encryption, type: 'spki', format: 'der' });
+  assert.equal(recipient.asymmetricKeyType, 'x25519');
+  // A well-encoded low-order point (e.g. all zero) parses but cannot derive a
+  // shared secret, so the actor's envelope encryption would fail on it.
+  let shared;
+  try {
+    shared = diffieHellman({ privateKey: generateKeyPairSync('x25519').privateKey, publicKey: recipient });
+  } catch {
+    shared = undefined;
+  }
+  assert.ok(shared && shared.some((byte) => byte !== 0),
+    'encryption_key must be a usable X25519 public key (X25519 key agreement with it failed)');
   const ack = canonicalBase64(manifest.ack_key, 32, 'ack_key');
   ed25519Public(ack);
   assert.ok(!ack.equals(tx), 'ack_key must differ from tx_public_key');
@@ -293,8 +310,7 @@ function init({ account, keys, manifest }) {
       // The exclusive file is still empty: check the ACL it inherited before any secret byte is written.
       const dir = dirname(file);
       try {
-        windowsAclCheck(file, 'restrict the directory with: icacls "' + dir + '" /inheritance:r /grant:r "'
-          + windowsUser() + ':(OI)(CI)F" and rerun init');
+        windowsAclCheck(file, 'to restrict the directory, ' + windowsAclFix(dir, '(OI)(CI)F') + ', and rerun init');
       } catch (error) {
         try { closeSync(fd); } catch { /* already closed */ }
         rmSync(file, { force: true });
@@ -434,12 +450,18 @@ function liquidate(flags) {
     await checkAccessKey(ctx.chain, ctx.local.manifest, ctx.marketId);
     const active = await ctx.view('get_active');
     assert.ok(active, 'the market has no active position to liquidate');
-    const input = { ...ctx.actorInput, provingDir: resolve(flags.proving) };
+    // Pin the actor to the slot read here, so the proof, the signature and the
+    // recovery nonce below always describe the same position.
+    const input = {
+      ...ctx.actorInput, provingDir: resolve(flags.proving),
+      expectedNonce: active.nonce, expectedCommitment: active.commitment,
+    };
     let result;
     try {
       result = ctx.actor(flags['dry-run'] ? 'prove' : 'liquidate', input);
     } catch (error) {
-      if (flags['dry-run']) throw error;
+      // The pin check runs before the witness is decrypted, so nothing was sent.
+      if (flags['dry-run'] || /position changed: expected nonce/.test(error.message)) throw error;
       throw new Error(error.message.trim() + '\n' + liquidationRecovery(flags, active.nonce));
     }
     output({
@@ -511,13 +533,18 @@ function selfTest() {
         const file = join(shared, 'k' + KEYS_SUFFIX);
         const out = join(shared, 'm.json');
         fails(cli('init', '--account', 'keeper-op.testnet', '--keys', file, '--manifest', out),
-          /would inherit an unsafe ACL: .*ACL also grants .*icacls ".*shared" \/inheritance:r .*Nothing was written/);
+          /would inherit an unsafe ACL: .*ACL also grants .*icacls ".*shared" \/inheritance:r .*keeps other explicit grants.*icacls ".*shared" \/remove:g "<account>".*recheck with: icacls ".*shared".*Nothing was written/);
         assert.ok(!existsSync(file) && !existsSync(out), 'a refused init left a file behind');
       });
 
       step('Windows key file ACL is checked read-only with icacls', () => {
         icacls(keyFile, '/grant', '*S-1-1-0:(R)');
-        fails(cli('manifest', '--keys', keyFile), /ACL also grants .*icacls ".*" \/inheritance:r \/grant:r/);
+        fails(cli('manifest', '--keys', keyFile),
+          /ACL also grants .*icacls ".*" \/inheritance:r \/grant:r .*icacls ".*" \/remove:g "<account>".*recheck/);
+        // Only on this temporary key file: the first printed command alone
+        // leaves the explicit outsider grant, and /remove:g then clears it.
+        icacls(keyFile, '/inheritance:r', '/grant:r', windowsUser() + ':F');
+        fails(cli('manifest', '--keys', keyFile), /ACL also grants /);
         icacls(keyFile, '/remove:g', '*S-1-1-0');
         ok(cli('manifest', '--keys', keyFile));
       });
@@ -634,6 +661,7 @@ function selfTest() {
         [{ ...manifest, ack_key: b64(Buffer.alloc(31, 1)) }, /ack_key/],
         [{ ...manifest, ack_key: b64(nearPublicKey(manifest.tx_public_key)) }, /must differ/],
         [{ ...manifest, encryption_key: b64(Buffer.concat([ED25519_SPKI, Buffer.alloc(32, 1)])) }, /X25519/],
+        [{ ...manifest, encryption_key: b64(Buffer.concat([X25519_SPKI, Buffer.alloc(32)])) }, /usable X25519/],
       ];
       for (const [index, [value, pattern]] of tampered.entries()) {
         const file = join(dir, 'tampered-' + index + '.json');
@@ -653,6 +681,35 @@ function selfTest() {
       const published = [readFileSync(manifestFile, 'utf8'), ...outputs];
       for (const text of published) for (const secret of secrets) assert.ok(!text.includes(secret));
     });
+
+    // tests/actor.mjs imports near-workspaces, so this step needs `npm ci`.
+    const actorFile = join(repoRoot, 'tests', 'actor.mjs');
+    if (existsSync(join(repoRoot, 'node_modules', 'near-workspaces', 'package.json'))) {
+      step('actor refuses a slot other than the pinned nonce and commitment', () => {
+        ok(run('--input-type=module', '-e', [
+          "import assert from 'node:assert/strict';",
+          'const { checkPinnedSlot } = await import(' + JSON.stringify(pathToFileURL(actorFile).href) + ');',
+          "const pin = { expectedNonce: 7, expectedCommitment: 'AAAA' };",
+          "checkPinnedSlot({ nonce: 7, commitment: 'AAAA' }, pin);",
+          "checkPinnedSlot({ nonce: 8, commitment: 'BBBB' }, {});",
+          "assert.throws(() => checkPinnedSlot({ nonce: 8, commitment: 'AAAA' }, pin),",
+          '  /expected nonce 7, read nonce 8; nothing was proved, signed or sent/);',
+          "assert.throws(() => checkPinnedSlot({ nonce: 7, commitment: 'BBBB' }, pin),",
+          '  /read nonce 7 with a different commitment/);',
+          "assert.throws(() => checkPinnedSlot(null, { expectedNonce: 7 }), /passed together/);",
+        ].join('\n')));
+        for (const command of ['prove', 'liquidate']) {
+          const child = spawnSync(process.execPath, ['--import', NETWORK_GUARD, actorFile, command], {
+            cwd: dir, encoding: 'utf8', timeout: 60_000,
+            input: JSON.stringify({ testnet: true, expectedCommitment: 'AAAA' }),
+          });
+          fails(child, /passed together/);
+          assert.doesNotMatch(child.stderr, /network disabled/);
+        }
+      });
+    } else {
+      results.push('(no node_modules; actor slot pin not checked)');
+    }
 
     step('Git ignores operator key files', () => {
       const git = spawnSync('git', ['check-ignore', '-q', 'operator' + KEYS_SUFFIX], { cwd: repoRoot });

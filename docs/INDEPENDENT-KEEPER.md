@@ -65,10 +65,22 @@ icacls <dir> /inheritance:r /grant:r "<USERDOMAIN>\<USERNAME>:(OI)(CI)F"
 icacls <dir>
 ```
 
-The second command should list only the operator. A later refused check on
-an existing key file prints
-`icacls <file> /inheritance:r /grant:r "<USERDOMAIN>\<USERNAME>:F"` with the
-actual path and account.
+The first command removes inherited entries and replaces only the
+operator's own explicit grant. It does not touch explicit grants to other
+accounts. If the second command still lists another account, remove that
+account's grant by its exact listed name and recheck:
+
+```text
+icacls <dir> /remove:g "<account>"
+icacls <dir>
+```
+
+Repeat until only the operator, `NT AUTHORITY\SYSTEM` or
+`BUILTIN\Administrators` remain. A later refused check on an existing key
+file prints the same steps for the file, with the actual path and account:
+`icacls <file> /inheritance:r /grant:r "<USERDOMAIN>\<USERNAME>:F"`, then
+`icacls <file> /remove:g "<account>"` for each other listed account, then
+`icacls <file>` to recheck. The tool itself never changes an ACL.
 
 The file holds three independent keys, using the field names
 `tests/actor.mjs` reads.
@@ -158,6 +170,13 @@ characters. Unknown flags are rejected.
   `get_active().ciphertexts[1]`, proves against the latest oracle, signs
   with `txKey`, and waits for finality. The tool stores no witness between
   `ack` and `liquidate`.
+- In both modes `liquidate` pins the actor to the `get_active()` nonce and
+  commitment it read, through `expectedNonce` and `expectedCommitment`.
+  The actor reads `get_active()` again and refuses any other slot before it
+  decrypts, proves or signs, so the proof and the recovery nonce always
+  describe the same position. That refusal means nothing was sent, so no
+  recovery steps are printed. If the slot changes after the actor's read,
+  the contract rejects the proof, which binds the nonce and commitment.
 
 ### After an uncertain `liquidate` error
 
@@ -370,8 +389,10 @@ loader blocks sockets. The self-test covers these cases.
   subdirectory that grants `Everyone` inherited read, `init` must refuse
   before writing any key and leave no key file and no manifest. It then adds
   an `Everyone` read entry to the key file and confirms that `manifest`
-  refuses the file. It then removes the entry and confirms that `manifest`
-  accepts the file.
+  refuses the file. On that temporary file only, it runs the printed
+  `/inheritance:r /grant:r` command and confirms that `manifest` still
+  refuses the explicit `Everyone` entry. It then removes the entry with
+  `/remove:g` and confirms that `manifest` accepts the file.
 - Exclusive writes: an existing key file or manifest is never overwritten.
   A refused `init` leaves no key file and no manifest, including when the
   manifest or key path is in a missing directory.
@@ -389,10 +410,17 @@ loader blocks sockets. The self-test covers these cases.
   keys, checked by an Ed25519 sign and verify, an X25519 agreement and NEAR
   key derivation.
 - `check-manifest` acceptance and rejection of an extra `txKey` field,
-  mainnet, a coordinator subaccount, a wrong-length or reused ack key, and
-  a non-X25519 encryption key.
+  mainnet, a coordinator subaccount, a wrong-length or reused ack key, a
+  non-X25519 encryption key, and a correctly encoded all-zero X25519 key.
+  `check-manifest` accepts an encryption key only if an X25519 agreement
+  with a fresh transient private key succeeds and yields a nonzero secret.
 - No private key, seed or encoding of one appears in the manifest or any
   stdout.
+- When `node_modules` is installed, the actor's slot pin. A different
+  nonce, or the same nonce with a different commitment, is refused. A pin
+  missing one of its two fields makes `actor('prove')` and
+  `actor('liquidate')` fail before any network access. Without
+  `node_modules` this check is skipped and reported as skipped.
 - Git ignores `*.keeper-keys.json`.
 
 The self-test never deploys or submits anything, and it makes no network
