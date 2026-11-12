@@ -196,10 +196,27 @@ function prepare({ market, nonce, fundingCheckpoint, openPriceTicks, trader, rec
   return { ...opened, ciphertexts, mismatched, offer };
 }
 
+// Optional pin: a caller that already read a slot passes expectedNonce and
+// expectedCommitment, and the actor refuses any other slot before it
+// decrypts, proves or signs. Callers that pass neither are unaffected.
+export function checkPinnedSlot(state, { expectedNonce, expectedCommitment }) {
+  const pinned = expectedNonce !== undefined || expectedCommitment !== undefined;
+  if (!pinned) return;
+  if (!Number.isSafeInteger(expectedNonce) || typeof expectedCommitment !== 'string') {
+    throw new Error('expectedNonce and expectedCommitment must be passed together');
+  }
+  if (state && (state.nonce !== expectedNonce || state.commitment !== expectedCommitment)) {
+    throw new Error('position changed: expected nonce ' + expectedNonce + ', read nonce ' + state.nonce
+      + (state.nonce === expectedNonce ? ' with a different commitment' : '')
+      + '; nothing was proved, signed or sent');
+  }
+}
+
 async function act(command, input) {
   if (command === 'configure') return configureKeeper(input.keyPath, input.txKey);
   if (command === 'prepare') return prepare(input);
 
+  checkPinnedSlot(null, input); // rejects a malformed pin before any network access
   const { rpcAddr, contractId, accountId, trader, keeperIndex, keyPath, provingDir } = input;
   const chain = await connectChain(rpcAddr, input.testnet ?? false);
   const contract = chain.rootAccount.getAccount(contractId);
@@ -209,6 +226,7 @@ async function act(command, input) {
   const state = await view(command === 'ack' ? 'get_pending' : 'get_active');
   const market = await view('get_market');
   if (!state) throw new Error(command === 'ack' ? 'missing keeper payload' : 'missing active position');
+  checkPinnedSlot(state, input);
 
   const isClose = command === 'prove-close';
   const keys = isClose ? null : JSON.parse(readFileSync(keyPath, 'utf8'));
