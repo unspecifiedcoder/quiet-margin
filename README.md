@@ -23,3 +23,4 @@ live in a temporary directory for the run. The fixture is synthetic.
 
 - [Sandbox specification](docs/SPEC.md)
 - [Build decisions](docs/DECISIONS.md)
+- [Verified Sandbox evidence](docs/SANDBOX-EVIDENCE.md)
