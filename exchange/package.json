@@ -1,0 +1,23 @@
+{
+  "name": "xythum-near-exchange",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "node --test --disable-warning=ExperimentalWarning \"src/protocol/test/*.test.mjs\""
+  },
+  "dependencies": {
+    "@near-js/crypto": "2.5.1",
+    "@near-js/transactions": "2.5.1",
+    "@noble/curves": "2.4.0"
+  },
+  "devDependencies": {
+    "@near-js/signers": "2.5.1",
+    "vite": "6.4.6"
+  },
+  "engines": {
+    "node": ">=22.12"
+  }
+}
