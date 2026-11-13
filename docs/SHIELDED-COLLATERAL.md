@@ -4,6 +4,14 @@ Open **Shielded Pool** in Quiet Margin. Connect a NEAR testnet wallet, then sign
 the NEP-413 unlock message. The same wallet key and app origin derive the same
 private trading key. The signature stays in the browser.
 
+## Verified deposits
+
+The connected wallet signed separate deposits of 60 and 40 mUSDC into the
+same NEAR testnet pool. Run `node scripts/verify-shielded-receipts.mjs` to
+check finality, token, pool, amount, and distinct note commitments through
+public RPC. [60 mUSDC deposit](https://testnet.near.rocks/tx/4jmNQpzBxzeXeSzDy4F5Yt9eBzwkvuqdwa6eTdFVzwp2) ·
+[40 mUSDC deposit](https://testnet.near.rocks/tx/9hNTdytrFupLxtABGDGECJEzkALbT2m32tZTJMrP6yeC)
+
 ## Walkthrough
 
 1. Start with 100 mUSDC in your connected testnet wallet and gas in the derived

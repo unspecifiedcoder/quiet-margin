@@ -1,0 +1,15 @@
+{
+  "wallet": "quiet-margin-demo-41d71371.testnet",
+  "pool": "shielded.qm-treasury-a280bef3.testnet",
+  "token": "musdc.qm-treasury-a280bef3.testnet",
+  "deposits": [
+    {
+      "hash": "4jmNQpzBxzeXeSzDy4F5Yt9eBzwkvuqdwa6eTdFVzwp2",
+      "cents": "6000"
+    },
+    {
+      "hash": "9hNTdytrFupLxtABGDGECJEzkALbT2m32tZTJMrP6yeC",
+      "cents": "4000"
+    }
+  ]
+}
