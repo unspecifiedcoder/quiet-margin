@@ -25,6 +25,7 @@ export function createExchange({ onState, allowSandbox = false, store } = {}) {
     onStart: () => controller.onStart(),
     onDeposit: (amount) => controller.onDeposit(amount),
     onOpen: (params) => controller.onOpen(params),
+    onRefreshQuote: () => controller.onRefreshQuote(),
     onClose: () => controller.onClose(),
     onWithdraw: (amount) => controller.onWithdraw(amount),
     onSetMark: (priceUsd) => controller.onSetMark(priceUsd),

@@ -454,7 +454,9 @@ export function mountExchange(root, handlers = {}, options = {}) {
     h('div', { class: 'xc-statusbar' }, r.status, r.alert),
     h('main', { class: 'xc-grid' }, r.ticket, r.chartCard, r.activity, r.privacyCard),
     h('footer', { class: 'xc-foot' },
-      h('p', { text: `${COLLATERAL} is mock collateral on a NEAR test network with no cash value. Prices are this market's oracle marks in USD, not an external market price. Nothing here promises a return.` })),
+      h('p', { text: options.spot
+        ? `${COLLATERAL} is a test token with no cash value. Binance spot is a reference; the published NEAR mark determines settlement.`
+        : `${COLLATERAL} is mock collateral on a NEAR test network with no cash value. This demo uses controlled oracle marks.` })),
     r.dialog);
 
   // ---------- behaviour ----------
@@ -472,7 +474,7 @@ export function mountExchange(root, handlers = {}, options = {}) {
     localError = null;
     render();
     try {
-      await handlers[name](...args);
+      return await handlers[name](...args);
     } catch (err) {
       localError = err?.message ? String(err.message) : 'The action failed.';
     } finally {
@@ -611,21 +613,25 @@ export function mountExchange(root, handlers = {}, options = {}) {
     }
     quoteKey = nextKey;
     r.review.disabled = Boolean(blocker) || locked;
-    setText(r.review, pending === 'onOpen' || state.busy === 'Opening position' ? 'Opening…' : 'Review long');
+    setText(r.review, pending === 'onRefreshQuote' ? 'Checking mark…'
+      : pending === 'onOpen' || state.busy === 'Opening position' ? 'Opening…' : 'Review long');
     setText(r.blocker, blocker ?? '');
     // Blocker text is only useful once there is a session; before that the
     // next-action card explains the single step.
     r.blocker.hidden = !state.session;
   }
 
-  function reviewOpen() {
-    const { lots, margin, blocker } = readForm();
+  async function reviewOpen() {
+    const { blocker } = readForm();
     renderForm();
     if (blocker || controlsLocked()) {
       if (needsEscrow()) { r.transferBox.open = true; r.deposit.input.focus(); }
-      else if (state.session && !slotOccupied()) (lots.ok ? r.margin.input : r.size.input).focus();
+      else if (state.session && !slotOccupied()) (readForm().lots.ok ? r.margin.input : r.size.input).focus();
       return;
     }
+    if (state.session?.live_market && has('onRefreshQuote') && !await run('onRefreshQuote')) return;
+    const { lots, margin, blocker: updatedBlocker } = readForm();
+    if (updatedBlocker || controlsLocked()) return;
     openDialog({
       title: 'Review long BTC-PERP',
       handler: 'onOpen',
@@ -812,7 +818,9 @@ export function mountExchange(root, handlers = {}, options = {}) {
       r.posBody.classList.add('is-stale');
     }
     if (!state.session) {
-      host.replaceChildren(h('p', { class: 'xc-empty', text: 'Not connected. Your position appears here after Start session.' }));
+      host.replaceChildren(h('p', { class: 'xc-empty', text: options.spot
+        ? 'Connect and unlock your wallet to see your positions.'
+        : 'Not connected. Your position appears here after Start session.' }));
       return;
     }
     const evidence = rc ? row('Latest NEAR receipt', h('span', { class: 'xc-hash' },
@@ -1071,7 +1079,7 @@ export function mountExchange(root, handlers = {}, options = {}) {
       case 'position': {
         const p = positionView();
         title = 'Position open';
-        body = `Long ${formatBtc(p?.sizeBtc)} BTC from ${formatPriceUsd(p?.entryUsd)} USD · est. liquidation ${formatPriceUsd(p?.liquidationUsd)} USD. Keeper B ${state.keeperArmed ? 'is armed: publish a test mark below liquidation to see it act.' : 'is not armed.'}`;
+        body = `Long ${formatBtc(p?.sizeBtc)} BTC from ${formatPriceUsd(p?.entryUsd)} USD · est. liquidation ${formatPriceUsd(p?.liquidationUsd)} USD. Keeper B ${state.keeperArmed ? (state.session?.live_market ? 'is armed for new NEAR marks.' : 'is armed: publish a test mark below liquidation to see it act.') : 'is not armed.'}`;
         break;
       }
       case 'active':

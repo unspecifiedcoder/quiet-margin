@@ -369,6 +369,7 @@ export class ExchangeController {
       session: {
         traderId: session.trader_id, marketId: session.market_id, tokenId: session.token_id,
         publicKey: signer.publicKey, custody: signer.custody, configFingerprint: fingerprint,
+        ...(session.live_market && { live_market: true }),
       },
       // Derived below from the coordinator view and the finalized active slot.
       keeperArmed: false,
@@ -632,6 +633,26 @@ export class ExchangeController {
       }
     } else if (age > M.ORACLE_FRESHNESS_BLOCKS - NO_REFRESH_HEADROOM_BLOCKS) {
       throw new Error('the oracle is near staleness and the server declined to refresh it; try again shortly');
+    }
+    return chain;
+  }
+
+  onRefreshQuote() {
+    return this.run('Checking the live NEAR mark', async () => {
+      if (this.ctx.session.live_market) await this.refreshLiveQuote();
+    });
+  }
+
+  async refreshLiveQuote() {
+    const { oracle, receipt } = await this.api.refreshOracle();
+    if (receipt) await this.verifyServerReceipt(receipt, this.ctx.config.oracle_id, 'publish_oracle');
+    await this.waitFor('oracle round ' + oracle.round, async () => {
+      const current = await this.ctx.rpc.view(this.ctx.session.market_id, 'get_oracle');
+      return current && current.round >= oracle.round ? current : null;
+    });
+    const chain = await this.refresh();
+    if (!chain.oracle || chain.height - chain.oracle.height > M.ORACLE_FRESHNESS_BLOCKS - NO_REFRESH_HEADROOM_BLOCKS) {
+      throw new Error('The live NEAR mark is not ready; try again shortly.');
     }
     return chain;
   }
@@ -1056,7 +1077,7 @@ export class ExchangeController {
   }
 
   async close() {
-    let chain = await this.refresh();
+    let chain = this.ctx.session.live_market ? await this.refreshLiveQuote() : await this.refresh();
     const { active } = chain;
     if (!active) throw new Error('there is no active position');
     const record = await this.openingRecord();

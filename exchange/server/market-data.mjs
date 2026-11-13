@@ -34,7 +34,7 @@ export function createMarketData({ fetchImpl = fetch, now = Date.now } = {}) {
       || trades.length !== 1 || !Number.isSafeInteger(trades[0]?.time)) throw unavailable();
     let previous = 0;
     const candles = rows.map((row) => {
-      if (!Array.isArray(row)) throw unavailable();
+      if (!Array.isArray(row) || row.length < 5) throw unavailable();
       const [time, ...raw] = row;
       if (!Number.isSafeInteger(time) || time % CANDLE_MS !== 0 || time <= previous) throw unavailable();
       previous = time;

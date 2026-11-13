@@ -86,6 +86,7 @@ export function parseSession(body) {
   });
   if (raws[0].every((b, i) => b === raws[1][i])) fail('keeper encryption keys are not distinct');
   if (typeof body.keeper_armed !== 'boolean') fail('keeper_armed');
+  if (body.live_market !== undefined && typeof body.live_market !== 'boolean') fail('live_market');
   if (!Array.isArray(body.receipts) || body.receipts.length > 64) fail('receipts');
   return {
     session_id: body.session_id,
@@ -96,6 +97,7 @@ export function parseSession(body) {
     rpc_url: body.rpc_url,
     keeper_encryption_keys: [...keys],
     keeper_armed: body.keeper_armed,
+    ...(body.live_market === true && { live_market: true }),
     receipts: body.receipts.map((r) => parseReceipt(r, 'session')),
   };
 }
