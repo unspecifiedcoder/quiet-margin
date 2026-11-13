@@ -1,0 +1,123 @@
+1
+00:00:00,160 --> 00:00:07,584
+Quiet Margin. Trade Bitcoin perps on NEAR testnet. Watch what
+the trader sees, what anyone can see, and what happens when
+
+2
+00:00:07,584 --> 00:00:09,056
+the trader goes offline.
+
+3
+00:00:11,743 --> 00:00:18,741
+Connect the public NEAR wallet, then sign a message to unlock
+the private trading wallet. This signature moves no funds.
+
+4
+00:00:21,618 --> 00:00:29,269
+Claim one hundred mock U S D C to the public wallet. Deposit
+one hundred into the shielded pool and approve the public
+
+5
+00:00:29,269 --> 00:00:29,853
+transfer.
+
+6
+00:00:30,327 --> 00:00:37,470
+The testnet publisher relays a real Bitcoin price from
+Binance. This receipt shows the on chain mark that settles the
+
+7
+00:00:37,470 --> 00:00:37,836
+trade.
+
+8
+00:00:38,327 --> 00:00:47,298
+Open a point zero zero one Bitcoin short with thirty mock U S
+D C of isolated margin. The browser proves it. Seventy stays
+
+9
+00:00:47,298 --> 00:00:48,033
+available.
+
+10
+00:00:48,493 --> 00:00:56,129
+On the left, the trader sees side, size, and margin. On the
+right, a public observer sees the private signer, entry mark,
+
+11
+00:00:56,129 --> 00:01:03,827
+commitments, and proof. The exact trade terms are absent from
+the open arguments. Designated keepers can read them. Public
+
+12
+00:01:03,827 --> 00:01:06,477
+funding and timing can help link activity.
+
+13
+00:01:06,952 --> 00:01:10,194
+The block explorer shows where NEAR included this private
+open.
+
+14
+00:01:10,660 --> 00:01:17,543
+Close against the live settlement mark. At the same mark, the
+thirty returns to the shielded balance. The public wallet
+
+15
+00:01:17,543 --> 00:01:18,873
+balance stays the same.
+
+16
+00:01:19,327 --> 00:01:26,482
+The close posts a note commitment and public maker credit.
+Settlement accounting and price movement can sometimes reveal
+
+17
+00:01:26,482 --> 00:01:31,252
+position size or direction. The collateral stays in a note the
+trader can spend.
+
+18
+00:01:31,743 --> 00:01:39,181
+Withdraw ten to the connected public NEAR address. Ninety
+stays shielded. The token transfer exposes the amount and
+
+19
+00:01:39,181 --> 00:01:39,957
+destination.
+
+20
+00:01:44,743 --> 00:01:52,787
+Same contract code, separate testnet pool. We control the mark
+here so we can reproduce liquidation on demand. Trader A opens
+
+21
+00:01:52,787 --> 00:01:56,647
+a long. Trader B opens a short. Both trading sessions close.
+
+22
+00:02:00,452 --> 00:02:07,744
+At sixty eight thousand eight hundred, NEAR rejects Keeper B’s
+long liquidation proof. The proof was built for an adverse
+
+23
+00:02:07,744 --> 00:02:11,481
+price. The actual mark is healthy, so the position stays open.
+
+24
+00:02:15,452 --> 00:02:23,584
+The controlled mark drops to forty thousand. Keeper B proves
+the long is below maintenance and NEAR accepts it. One point
+
+25
+00:02:23,584 --> 00:02:25,734
+two mock U S D C stays shielded.
+
+26
+00:02:26,202 --> 00:02:33,942
+The short also shows a healthy rejection and an accepted
+Keeper B liquidation after the controlled mark rises to ninety
+
+27
+00:02:33,942 --> 00:02:36,868
+six thousand. Two point eight stays shielded.
