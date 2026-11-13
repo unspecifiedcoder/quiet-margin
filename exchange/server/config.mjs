@@ -82,8 +82,8 @@ export function loadConfig(env = process.env) {
       throw new ConfigError('XYTHUM_WALLET_ORIGIN must be a canonical HTTPS origin');
     }
   }
-  if (hosted && walletFaucet && !walletOrigin) {
-    throw new ConfigError('hosted wallet faucet requires XYTHUM_WALLET_ORIGIN');
+  if (hosted && walletFaucet) {
+    throw new ConfigError('wallet faucet is loopback-only until the hosted wallet connector is supported');
   }
   // Without an explicit quota the server runs read-only for sessions.
   const sessionQuota = quotaRaw === undefined || quotaRaw === ''

@@ -238,7 +238,28 @@ Hosted responses also carry `Content-Security-Policy`
 connect-src 'self' https://test.rpc.fastnear.com; style-src 'self';
 frame-ancestors 'none'`, and so on), `X-Frame-Options: DENY`, HSTS,
 `Cross-Origin-Opener-Policy: same-origin` and a restrictive
-`Permissions-Policy`. Local mode and the Vite dev server are unchanged.
+`Permissions-Policy`. The existing hosted exchange and explicit
+`?wallet=legacy` route use the original flow.
+
+For the connected wallet testnet exchange, run on loopback with
+`XYTHUM_WALLET_FAUCET=1` and an explicit funded session quota.
+Set `XYTHUM_LIVE_MARKET=1` to use Binance spot snapshots for the signed
+NEAR mark. The chart is a continuously refreshed BTC/USDT spot reference;
+NEAR settles against its last published USD mark, which the browser checks
+before order review and close. The coordinator signs that mark; the source
+is not independently attested. Controlled test marks remain available in
+the original demo. The connected mode is disabled in hosted mode while
+its external wallet integration is adapted to the hosted CSP.
+
+Connect without adding a NEAR access key. Then sign a message to derive a
+separate, origin-bound private trader key. Using the same wallet key and
+origin restores that trading account, but does not restore a position
+opening that was stored only in another browser. To start trading, sign
+another message to claim one 600 mUSDC test grant per NEAR account. The
+faucet sees both identities when it verifies that claim. The original
+account is absent from the resulting on-chain grant and trade payloads.
+The fixed 600 mUSDC escrow and settlement are public. This feature does
+not accept real USDC or put the test grant in a shared shielded pool.
 
 ## Configuration
 
@@ -248,6 +269,7 @@ frame-ancestors 'none'`, and so on), `X-Frame-Options: DENY`, HSTS,
 | `XYTHUM_HOSTED_INVITE` | none | required when hosted: 64 lowercase hex |
 | `XYTHUM_CREDENTIALS_FILE` | unset (runtime variables) | hosted only; absolute, outside the repository |
 | `XYTHUM_SESSION_QUOTA` | unset (creation off) | 1–50 |
+| `XYTHUM_WALLET_FAUCET` / `XYTHUM_LIVE_MARKET` | off | opt in with `1`; wallet faucet is loopback only |
 | `XYTHUM_SESSION_DIR` | `.testnet/exchange-sessions` | must not be `.testnet` or the proving directory |
 | `XYTHUM_PROVING_DIR` | `.testnet/proving` | must hold `open.pk`, `close.pk`, `liquidation.pk` |
 | `XYTHUM_VK_FINGERPRINTS` | recorded testnet fingerprints | JSON `{open, liquidation, close}` |

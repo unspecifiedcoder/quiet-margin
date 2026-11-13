@@ -383,6 +383,9 @@ export class Coordinator {
     if (!record.steps.trader_account) near += this.config.traderNear;
     if (!record.steps.market_registration) near += REGISTRATION_DEPOSIT;
     if (!record.steps.trader_registration) near += REGISTRATION_DEPOSIT;
+    if (!record.steps.maker_vault && await this.#view(this.ids.token, 'storage_balance_of', { account_id: this.ids.maker }) === null) {
+      near += REGISTRATION_DEPOSIT;
+    }
     const root = await this.chain.accountState(this.ids.root);
     if (!root) throw new Error('demo root account is missing');
     const spendable = BigInt(root.amount) - BigInt(root.storage_usage) * 10n ** 19n;
@@ -473,6 +476,13 @@ export class Coordinator {
       const ledger = await this.#view(record.market_id, 'get_ledger');
       const need = this.config.makerVaultMusdc - ledger.maker_vault;
       if (need > 0) {
+        // A fresh treasury may have deployed the token without registering its
+        // maker. Do this under the root lock, before transferring any tokens.
+        if (await this.#view(this.ids.token, 'storage_balance_of', { account_id: this.ids.maker }) === null) {
+          const tx = await this.#callHeld('DEMO', this.ids.token, 'storage_deposit',
+            { account_id: this.ids.maker, registration_only: true }, { attachedDeposit: REGISTRATION_DEPOSIT });
+          await this.#receipt(record, 'maker_registration', tx);
+        }
         const wallet = Number(await this.#view(this.ids.token, 'ft_balance_of', { account_id: this.ids.maker }));
         if (wallet < need) {
           const tx = await this.#callHeld('DEMO', this.ids.token, 'ft_transfer',

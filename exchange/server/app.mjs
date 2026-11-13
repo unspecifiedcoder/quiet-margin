@@ -155,6 +155,7 @@ export function createApp({ coordinator, config, log = () => {} }) {
     },
     'GET /api/health': async () => [200, {
       ok: true, chain_id: 'testnet', sessions: coordinator.store.size, session_quota: config.sessionQuota,
+      ...(config.walletFaucet && !config.hosted && { connected_wallet: true }),
     }],
   };
 

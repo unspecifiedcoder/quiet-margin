@@ -14,7 +14,17 @@ if (route === 'burner') {
 } else if (route === 'legacy' || allowSandbox) {
   startDefault();
 } else {
-  startConnectedExchange(root, { createExchange, mountExchange, allowSandbox });
+  startConfiguredExchange();
+}
+
+async function startConfiguredExchange() {
+  const capabilities = await fetch('/api/health', { signal: AbortSignal.timeout(3_000) })
+    .then((response) => response.ok ? response.json() : null).catch(() => null);
+  if (capabilities?.connected_wallet === true) {
+    startConnectedExchange(root, { createExchange, mountExchange, allowSandbox });
+  } else {
+    startDefault();
+  }
 }
 
 function startDefault() {
