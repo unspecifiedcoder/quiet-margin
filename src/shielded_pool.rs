@@ -9,7 +9,7 @@ use near_sdk::{
 
 type Hash = [u8; 32];
 const ZERO: Hash = [0; 32];
-const LEAVES: usize = 16;
+const LEAVES: usize = if cfg!(feature = "judge-pool") { 64 } else { 16 };
 const CAP: u64 = 60_000;
 const SPEND_INPUTS: usize = if cfg!(feature = "browser-pool") {
     11
@@ -46,6 +46,8 @@ pub struct ShieldedPool {
     spend_vk: Vec<u8>,
     close_vk: Vec<u8>,
     leaves: Vec<Hash>,
+    #[cfg(feature = "judge-pool")]
+    tree: Vec<Hash>,
     spent: Vec<Hash>,
     positions: Vec<Position>,
     pending: Vec<(u32, Exit)>,
@@ -135,6 +137,8 @@ impl ShieldedPool {
             spend_vk: spend_vk.0,
             close_vk: close_vk.0,
             leaves: vec![],
+            #[cfg(feature = "judge-pool")]
+            tree: Self::empty_tree(),
             spent: vec![],
             positions: vec![],
             pending: vec![],
@@ -192,7 +196,7 @@ impl ShieldedPool {
         if !self.can_append(&leaf, 0) {
             return PromiseOrValue::Value(amount);
         }
-        self.leaves.push(leaf);
+        self.append(leaf);
         emit(
             "note_deposited",
             json!({"leaf": b64(leaf), "amount": amount}),
@@ -372,7 +376,8 @@ impl ShieldedPool {
 
     pub fn get_pool(&self) -> serde_json::Value {
         json!({
-            "proof_version": if cfg!(feature = "browser-pool") { "poseidon-v1" } else { "sha256-v2" },
+            "proof_version": if cfg!(feature = "judge-pool") { "poseidon-v2" } else if cfg!(feature = "browser-pool") { "poseidon-v1" } else { "sha256-v2" },
+            "capacity": LEAVES,
             "domain": b64(self.domain), "token": self.token, "root": b64(self.root()),
             "leaves": self.leaves.iter().copied().map(b64).collect::<Vec<_>>(),
             "spent": self.spent.iter().copied().map(b64).collect::<Vec<_>>(),
@@ -406,10 +411,41 @@ impl ShieldedPool {
 
     fn append(&mut self, leaf: Hash) {
         if leaf != ZERO {
+            #[cfg(feature = "judge-pool")]
+            {
+                let mut index = LEAVES + self.leaves.len();
+                self.tree[index] = leaf;
+                while index > 1 {
+                    index /= 2;
+                    self.tree[index] = crate::pool_poseidon::branch(
+                        &self.tree[index * 2],
+                        &self.tree[index * 2 + 1],
+                    );
+                }
+            }
             self.leaves.push(leaf);
         }
     }
 
+    #[cfg(feature = "judge-pool")]
+    fn empty_tree() -> Vec<Hash> {
+        let mut tree = vec![ZERO; LEAVES * 2];
+        let mut width = LEAVES;
+        let mut hash = ZERO;
+        while width > 1 {
+            hash = crate::pool_poseidon::branch(&hash, &hash);
+            tree[width / 2..width].fill(hash);
+            width /= 2;
+        }
+        tree
+    }
+
+    #[cfg(feature = "judge-pool")]
+    fn root(&self) -> Hash {
+        self.tree[1]
+    }
+
+    #[cfg(not(feature = "judge-pool"))]
     fn root(&self) -> Hash {
         let mut nodes = [ZERO; LEAVES];
         nodes[..self.leaves.len()].copy_from_slice(&self.leaves);

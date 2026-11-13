@@ -562,7 +562,7 @@ fn pool_hash_json(operation: &str, input: &str) -> Result<String, String> {
         }
         "branches" => {
             let pairs: Vec<[Hash; 2]> = serde_json::from_str(input).map_err(invalid)?;
-            if pairs.len() > 8 {
+            if pairs.len() > 32 {
                 return Err("Too many Merkle branches.".into());
             }
             serde_json::to_string(
@@ -576,7 +576,14 @@ fn pool_hash_json(operation: &str, input: &str) -> Result<String, String> {
             let (context, blinder, lots, entry, margin): (Hash, Hash, u16, u16, u32) =
                 serde_json::from_str(input).map_err(invalid)?;
             serde_json::to_string(&pool_fast::commitment(
-                &context, &blinder, lots, entry, margin,
+                &context, &blinder, lots, entry, margin, false,
+            ))
+        }
+        "judge_position" => {
+            let (context, blinder, lots, entry, margin, short): (Hash, Hash, u16, u16, u32, bool) =
+                serde_json::from_str(input).map_err(invalid)?;
+            serde_json::to_string(&pool_fast::commitment(
+                &context, &blinder, lots, entry, margin, short,
             ))
         }
         _ => return Err("Unknown pool hash operation.".into()),
@@ -684,6 +691,27 @@ mod wasm {
     ) -> Result<String, JsError> {
         js(crate::pool_fast::prove_json(
             kind,
+            "poseidon-v1",
+            &bytes(pk_bytes)?,
+            fingerprint,
+            input,
+            || {
+                let _ = key_loaded.call0(&JsValue::UNDEFINED);
+            },
+        ))
+    }
+
+    #[wasm_bindgen]
+    pub fn prove_judge_pool(
+        kind: &str,
+        pk_bytes: &JsValue,
+        fingerprint: &str,
+        input: &str,
+        key_loaded: &js_sys::Function,
+    ) -> Result<String, JsError> {
+        js(crate::pool_fast::prove_json(
+            kind,
+            "poseidon-v2",
             &bytes(pk_bytes)?,
             fingerprint,
             input,

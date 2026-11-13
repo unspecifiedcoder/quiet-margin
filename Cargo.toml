@@ -15,6 +15,7 @@ crate-type = ["cdylib", "rlib"]
 mock-token = ["dep:near-contract-standards"]
 shielded-pool = []
 browser-pool = ["shielded-pool", "dep:ark-bls12-381", "dep:ark-crypto-primitives", "dep:ark-ff"]
+judge-pool = ["browser-pool"]
 
 [dependencies]
 near-sdk = "=5.30.1"
