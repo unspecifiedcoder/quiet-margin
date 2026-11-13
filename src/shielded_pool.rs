@@ -11,8 +11,16 @@ type Hash = [u8; 32];
 const ZERO: Hash = [0; 32];
 const LEAVES: usize = 16;
 const CAP: u64 = 60_000;
-const SPEND_INPUTS: usize = 19;
-const CLOSE_INPUTS: usize = 13;
+const SPEND_INPUTS: usize = if cfg!(feature = "browser-pool") {
+    11
+} else {
+    19
+};
+const CLOSE_INPUTS: usize = if cfg!(feature = "browser-pool") {
+    8
+} else {
+    13
+};
 
 #[near(serializers = [borsh])]
 #[derive(Clone)]
@@ -52,10 +60,13 @@ fn digest(parts: &[&[u8]]) -> Hash {
 }
 
 fn parse(bytes: Base64VecU8) -> Hash {
-    bytes
+    let hash = bytes
         .0
         .try_into()
-        .unwrap_or_else(|_| env::panic_str("ERR_HASH_LENGTH"))
+        .unwrap_or_else(|_| env::panic_str("ERR_HASH_LENGTH"));
+    #[cfg(feature = "browser-pool")]
+    require!(crate::pool_poseidon::canonical(&hash), "ERR_FIELD_ENCODING");
+    hash
 }
 
 fn b64(bytes: Hash) -> Base64VecU8 {
@@ -65,6 +76,10 @@ fn b64(bytes: Hash) -> Base64VecU8 {
 fn proof_inputs(digests: &[Hash], integers: &[u64]) -> Vec<Hash> {
     let mut inputs = Vec::with_capacity(digests.len() * 2 + integers.len());
     for digest in digests {
+        if cfg!(feature = "browser-pool") {
+            inputs.push(*digest);
+            continue;
+        }
         for chunk in digest.chunks_exact(16) {
             let mut field = ZERO;
             field[..16].copy_from_slice(chunk);
@@ -110,6 +125,8 @@ impl ShieldedPool {
             b":",
             token.as_bytes(),
         ]);
+        #[cfg(feature = "browser-pool")]
+        let domain = crate::pool_poseidon::encode(crate::pool_poseidon::field(&domain));
         Self {
             token,
             maker,
@@ -157,12 +174,21 @@ impl ShieldedPool {
         if inner.0.len() != 32 || serde_json::to_value(&inner).ok() != Some(json!(msg)) {
             return PromiseOrValue::Value(amount);
         }
+        #[cfg(not(feature = "browser-pool"))]
         let leaf = digest(&[
             b"QM:note-leaf:2",
             &self.domain,
             &inner.0,
             &cents.to_le_bytes(),
         ]);
+        #[cfg(feature = "browser-pool")]
+        let leaf = {
+            let inner: Hash = inner.0.try_into().expect("checked hash length");
+            if !crate::pool_poseidon::canonical(&inner) {
+                return PromiseOrValue::Value(amount);
+            }
+            crate::pool_poseidon::leaf(&self.domain, &inner, cents)
+        };
         if !self.can_append(&leaf, 0) {
             return PromiseOrValue::Value(amount);
         }
@@ -295,6 +321,8 @@ impl ShieldedPool {
         let n = nullifiers.map(parse);
         let change = parse(change);
         let to = digest(&[b"QM:exit:2:", recipient.as_bytes()]);
+        #[cfg(feature = "browser-pool")]
+        let to = crate::pool_poseidon::encode(crate::pool_poseidon::field(&to));
         self.check_spend(parse(root), n, to, change, ZERO, ZERO, 0, cents, &proof.0);
         let id = self.next_exit;
         self.next_exit = id.checked_add(1).expect("exit overflow");
@@ -344,6 +372,7 @@ impl ShieldedPool {
 
     pub fn get_pool(&self) -> serde_json::Value {
         json!({
+            "proof_version": if cfg!(feature = "browser-pool") { "poseidon-v1" } else { "sha256-v2" },
             "domain": b64(self.domain), "token": self.token, "root": b64(self.root()),
             "leaves": self.leaves.iter().copied().map(b64).collect::<Vec<_>>(),
             "spent": self.spent.iter().copied().map(b64).collect::<Vec<_>>(),
@@ -387,7 +416,14 @@ impl ShieldedPool {
         let mut width = LEAVES;
         while width > 1 {
             for i in 0..width / 2 {
-                nodes[i] = digest(&[b"QM:branch:1", &nodes[2 * i], &nodes[2 * i + 1]]);
+                #[cfg(not(feature = "browser-pool"))]
+                {
+                    nodes[i] = digest(&[b"QM:branch:1", &nodes[2 * i], &nodes[2 * i + 1]]);
+                }
+                #[cfg(feature = "browser-pool")]
+                {
+                    nodes[i] = crate::pool_poseidon::branch(&nodes[2 * i], &nodes[2 * i + 1]);
+                }
             }
             width /= 2;
         }

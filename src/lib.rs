@@ -11,6 +11,8 @@ pub mod mock_token;
 #[cfg(not(feature = "mock-token"))]
 mod verifier;
 
+#[cfg(feature = "browser-pool")]
+mod pool_poseidon;
 #[cfg(all(feature = "shielded-pool", not(feature = "mock-token")))]
 pub mod shielded_pool;
 

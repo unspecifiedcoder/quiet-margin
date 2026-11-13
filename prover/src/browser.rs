@@ -550,6 +550,41 @@ pub fn compress_proving_key(
 }
 
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+fn pool_hash_json(operation: &str, input: &str) -> Result<String, String> {
+    use crate::{pool::Note, pool_fast, pool_poseidon};
+    use pool_poseidon::Hash;
+    let invalid = |_| "Invalid pool hash input.".to_owned();
+    let output = match operation {
+        "note" => {
+            let (domain, owner, note): (Hash, Hash, Note) =
+                serde_json::from_str(input).map_err(invalid)?;
+            serde_json::to_string(&pool_fast::note_fields(&domain, &owner, &note))
+        }
+        "branches" => {
+            let pairs: Vec<[Hash; 2]> = serde_json::from_str(input).map_err(invalid)?;
+            if pairs.len() > 8 {
+                return Err("Too many Merkle branches.".into());
+            }
+            serde_json::to_string(
+                &pairs
+                    .iter()
+                    .map(|[l, r]| pool_poseidon::branch(l, r))
+                    .collect::<Vec<_>>(),
+            )
+        }
+        "position" => {
+            let (context, blinder, lots, entry, margin): (Hash, Hash, u16, u16, u32) =
+                serde_json::from_str(input).map_err(invalid)?;
+            serde_json::to_string(&pool_fast::commitment(
+                &context, &blinder, lots, entry, margin,
+            ))
+        }
+        _ => return Err("Unknown pool hash operation.".into()),
+    };
+    output.map_err(invalid)
+}
+
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 mod wasm {
     use js_sys::Uint8Array;
     use wasm_bindgen::JsCast;
@@ -637,5 +672,29 @@ mod wasm {
                 let _ = key_loaded.call0(&JsValue::UNDEFINED);
             },
         ))
+    }
+
+    #[wasm_bindgen]
+    pub fn prove_browser_pool(
+        kind: &str,
+        pk_bytes: &JsValue,
+        fingerprint: &str,
+        input: &str,
+        key_loaded: &js_sys::Function,
+    ) -> Result<String, JsError> {
+        js(crate::pool_fast::prove_json(
+            kind,
+            &bytes(pk_bytes)?,
+            fingerprint,
+            input,
+            || {
+                let _ = key_loaded.call0(&JsValue::UNDEFINED);
+            },
+        ))
+    }
+
+    #[wasm_bindgen]
+    pub fn pool_hash(operation: &str, input: &str) -> Result<String, JsError> {
+        js(super::pool_hash_json(operation, input))
     }
 }

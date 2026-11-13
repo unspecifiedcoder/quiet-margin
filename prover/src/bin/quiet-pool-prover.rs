@@ -13,6 +13,7 @@ use xythum_prover::{
     encoding::vk_bytes,
     model::sha256,
     pool::{self, Close, Spend},
+    pool_fast::{FastClose, FastSpend},
 };
 
 fn setup<C: ConstraintSynthesizer<Fr>>(
@@ -42,6 +43,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             fs::create_dir(dir)?;
             setup(dir, "spend", Spend::default())?;
             setup(dir, "close", Close::default())?;
+        }
+        [command, dir] if command == "setup-browser" => {
+            let dir = Path::new(dir);
+            fs::create_dir(dir)?;
+            setup(dir, "spend", FastSpend::default())?;
+            setup(dir, "close", FastClose::default())?;
         }
         [command, source, output] if command == "uncompress" => {
             let file = std::fs::File::open(source)?;
@@ -74,7 +81,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
         _ => return Err(
-            "Usage: quiet-pool-prover setup DIR | prove DIR spend|close [VK_FINGERPRINT] | uncompress SOURCE OUTPUT"
+            "Usage: quiet-pool-prover setup|setup-browser DIR | prove DIR spend|close [VK_FINGERPRINT] | uncompress SOURCE OUTPUT"
                 .into(),
         ),
     }
