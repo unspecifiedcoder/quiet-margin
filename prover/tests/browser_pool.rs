@@ -151,3 +151,56 @@ fn a_short_gains_when_the_mark_falls_and_loses_when_it_rises() {
     close.payout.cents = 2900;
     assert!(satisfied(FastClose::<true>(close)));
 }
+
+#[test]
+fn liquidation_requires_unhealthy_equity_and_preserves_the_traders_note() {
+    use xythum_prover::pool_fast::{Liquidation, commitment, note_fields};
+    for (short, price, expected_cents) in [(false, 4000, 120), (true, 9600, 280)] {
+        let context = [13; 32];
+        let blinder = [3; 32];
+        let domain = [4; 32];
+        let owner = [8; 32];
+        let opening = Liquidation {
+            commitment: commitment(&context, &blinder, 1, 6880, 3000, short),
+            context,
+            blinder,
+            lots: 1,
+            entry: 6880,
+            margin: 3000,
+            short,
+            domain,
+            owner_tag: note_fields(&domain, &owner, &Note::default())[3],
+            price,
+            round: 8,
+        };
+        assert_eq!(opening.payout(), expected_cents);
+        assert_eq!(
+            opening.public()[4],
+            note_fields(
+                &domain,
+                &owner,
+                &Note {
+                    cents: expected_cents,
+                    salt: blinder
+                }
+            )[1]
+        );
+        let cs = ConstraintSystem::new_ref();
+        let healthy = Liquidation {
+            price: 6880,
+            ..opening.clone()
+        };
+        healthy.generate_constraints(cs.clone()).unwrap();
+        assert!(!cs.is_satisfied().unwrap());
+        let cs = ConstraintSystem::new_ref();
+        let invalid = Liquidation {
+            short: !short,
+            ..opening.clone()
+        };
+        invalid.generate_constraints(cs.clone()).unwrap();
+        assert!(!cs.is_satisfied().unwrap());
+        let cs = ConstraintSystem::new_ref();
+        opening.generate_constraints(cs.clone()).unwrap();
+        assert!(cs.is_satisfied().unwrap());
+    }
+}
