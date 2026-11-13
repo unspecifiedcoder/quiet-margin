@@ -4,7 +4,52 @@ Open **Shielded Pool** in Quiet Margin. Connect a NEAR testnet wallet, then sign
 the NEP-413 unlock message. The same wallet key and app origin derive the same
 private trading key. The signature stays in the browser.
 
-## Verified testnet trade
+## Browser-only build
+
+The default `/shielded` route uses `browser-pool.qm-treasury-a280bef3.testnet`.
+The app serves its public proving keys and Wasm from static assets. The browser
+proves opens, closes, and withdrawals and submits signed transactions directly
+to NEAR testnet. The spend key is 3.50 MB and the close key is 1.15 MB. The
+Poseidon circuit uses the BLS12-381 parameters from the paper and retains
+hidden membership, note nullifiers, and balance conservation.
+
+Build the site with `npm ci --prefix exchange` and
+`npm run build --prefix exchange`. Serve `exchange/dist` over HTTPS with
+`/shielded` routed to `index.html`, or run `npm run preview --prefix exchange`
+for a local preview. Static hosting needs no wallet credentials, NEAR SDK,
+Rust build, or proving service. Testers need a NEAR testnet wallet with mock
+USDC and a funded private signer. The unlock signature is scoped to the site
+origin, so the operator must activate the signer shown on the actual judge URL.
+Run `node scripts/provision-shielded-pool.mjs --browser-pool --activate <implicit-testnet-account>`
+to fund that signer separately.
+
+Existing deposits and backups belong to the original SHA-256 pool. Access it
+at `/shielded?pool=legacy` on a host configured with its original assets.
+Withdraw there before depositing into the browser pool.
+
+[Poseidon paper](https://eprint.iacr.org/2019/458.pdf)
+
+### Browser-only testnet receipts
+
+A fresh Edge profile connected to the static preview and signed deposits of
+60 and 40 mUSDC. Opening a 0.001 BTC long locked 30 mUSDC and returned 70
+as shielded change. Closing at the same mark brought the balance back to
+100 mUSDC, and withdrawing returned it to the connected wallet.
+
+| Action | Click to NEAR finality | Explorer |
+| --- | --- | --- |
+| Deposit 60 mUSDC | | [Receipt](https://testnet.near.rocks/tx/EcaPh8otubQUj2U7AY5M3iEnHBW9Pbevvdm77GgMEDcs) |
+| Deposit 40 mUSDC | | [Receipt](https://testnet.near.rocks/tx/6Cg5MmQ9TstQKbo5kMnyXfkQXppQiufDsGhjJQYVBti8) |
+| Open | 9.8 s | [Receipt](https://testnet.near.rocks/tx/EedGeSChT5gqS1M1fzhN3Afwsw9v5hsNwLc14U317dXv) · [Opening block](https://testnet.near.rocks/block/2o3VtaSwvRLNRGBJW3vSTZtvGhmpWr7rdpjbq6rvwhTz) |
+| Close | 8.1 s | [Receipt](https://testnet.near.rocks/tx/DNVUqZpR9opjpL2nnsHUtPUUtAQwCTyMAW78AQpBZwT5) |
+| Withdraw | 11.4 s | [Receipt](https://testnet.near.rocks/tx/8Fm7x7U2xguxWNo68kGX5h3QYckwAEx5ufSomonPwnH8) |
+
+The recorded timings include proving and testnet confirmation on one machine.
+The test blocked the desktop helper endpoint and asserted that the browser
+loaded only the three public proving key requests. Check the final receipts
+and public fields with `node scripts/verify-shielded-receipts.mjs --browser`.
+
+## Earlier desktop-prover testnet trade
 
 [Watch the full clicking demo](media/quiet-margin-shielded-pool.mp4).
 
@@ -59,7 +104,9 @@ private signer or owner tag links its own activity. Deposit and withdrawal
 timing, distinctive amounts, sparse pool activity, and public maker credit can
 reveal relationships or position details through inference.
 
-The shared pool is a 16-leaf testnet prototype with long-only BTC and mock USDC.
+Each shared pool is a 16-leaf testnet prototype with long-only BTC and mock USDC.
+Deposits and change use append-only leaves, so the demo can serve a limited
+number of independent live trades before the pool fills.
 The demo uses a controlled on-chain settlement mark. The original exchange
 covers offline keeper liquidation and healthy-position rejection. The shared
 pool currently supports trader-initiated close and proof-based withdrawal.
@@ -67,7 +114,7 @@ A real USDC deployment would need an independently reviewed setup, expanded
 capacity, operational gas sponsorship, oracle and liquidation coverage, and
 accounting against the actual token's decimals.
 
-## Operator setup
+## Legacy pool operator setup
 
 The existing testnet operator credential files stay in the ignored
 `.testnet/quiet-margin-wallet-recording/` folder. The provisioning script uses

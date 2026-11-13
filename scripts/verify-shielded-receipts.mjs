@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
-const evidence = JSON.parse(await readFile(new URL('../docs/shielded-testnet-receipts.json', import.meta.url), 'utf8'));
+const browser = process.argv.includes('--browser');
+const evidenceFile = browser ? 'browser-pool-testnet-receipts.json' : 'shielded-testnet-receipts.json';
+const evidence = JSON.parse(await readFile(new URL('../docs/' + evidenceFile, import.meta.url), 'utf8'));
 const { wallet, pool, token, deposits, lifecycle } = evidence;
 const rpc = 'https://test.rpc.fastnear.com';
 

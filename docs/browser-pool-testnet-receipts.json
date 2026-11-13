@@ -1,0 +1,33 @@
+{
+  "wallet": "quiet-margin-demo-41d71371.testnet",
+  "pool": "browser-pool.qm-treasury-a280bef3.testnet",
+  "token": "musdc.qm-treasury-a280bef3.testnet",
+  "deposits": [
+    {
+      "hash": "EcaPh8otubQUj2U7AY5M3iEnHBW9Pbevvdm77GgMEDcs",
+      "cents": "6000"
+    },
+    {
+      "hash": "6Cg5MmQ9TstQKbo5kMnyXfkQXppQiufDsGhjJQYVBti8",
+      "cents": "4000"
+    }
+  ],
+  "lifecycle": {
+    "trader": "d7d939531ff67b70dbf2b08ed8fe338a8517f80e20e69790cbc5cea9897a8acd",
+    "open": "EedGeSChT5gqS1M1fzhN3Afwsw9v5hsNwLc14U317dXv",
+    "close": "DNVUqZpR9opjpL2nnsHUtPUUtAQwCTyMAW78AQpBZwT5",
+    "withdrawal": "8Fm7x7U2xguxWNo68kGX5h3QYckwAEx5ufSomonPwnH8",
+    "block": "2o3VtaSwvRLNRGBJW3vSTZtvGhmpWr7rdpjbq6rvwhTz",
+    "height": 277520723
+  },
+  "browser": {
+    "keyRequests": [
+      "/shielded/browser-pool/spend.pk",
+      "/shielded/browser-pool/close.pk",
+      "/shielded/browser-pool/spend.pk"
+    ],
+    "openSeconds": 9.8,
+    "closeSeconds": 8.1,
+    "withdrawSeconds": 11.4
+  }
+}

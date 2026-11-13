@@ -12,6 +12,10 @@ is offline.
 
 ## First look
 
+The default Shielded Pool can prove and sign the full trade in the browser.
+The browser-only testnet run covered two deposits, 30 mUSDC margin with 70 in
+shielded change, close, and withdrawal. [Browser-only receipts and setup](docs/SHIELDED-COLLATERAL.md#browser-only-build)
+
 [Watch the Shielded Pool testnet demo](docs/media/quiet-margin-shielded-pool.mp4).
 It shows two connected-wallet deposits, a 30 mUSDC private long with 70 mUSDC
 in shielded change, close, and withdrawal. The transaction and block explorer
