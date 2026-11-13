@@ -193,7 +193,7 @@ invite gate (normally `HEAD` once the package is committed). The public
 artifacts come from the verified worktree:
 
 ```text
-node exchange/deploy/stage.mjs --ref HEAD --source C:\Users\Pramod\GitHub\xythum-near-perps --app <app>
+node exchange/deploy/stage.mjs --ref HEAD --source E:\github2\perp\xythum-near-perps --app <app>
 ```
 
 The output goes to `target/fly-stage/`, which is Git-ignored. `--out` must be
@@ -227,7 +227,7 @@ paid launch; watch its log for `launch: self-check ok`.
 ### 4. Least-privilege secrets file (local; run it yourself)
 
 ```text
-node exchange/deploy/secrets.mjs --from C:\Users\Pramod\GitHub\xythum-near-perps\.env --app <app> --out-dir C:\Users\Pramod\GitHub\xythum-near-perps\.testnet\fly
+node exchange/deploy/secrets.mjs --from E:\github2\perp\xythum-near-perps\.env --app <app> --out-dir E:\github2\perp\xythum-near-perps\.testnet\fly
 ```
 
 This writes `<app>.secrets.env` (the role variables plus the invite, as
@@ -262,7 +262,7 @@ own preflight still refuses a session the root cannot cover
 fly auth whoami
 fly apps create <app> --org <org>
 fly volumes create xythum_sessions --app <app> --region iad --size 1 --yes
-fly secrets import --app <app> --stage < C:\Users\Pramod\GitHub\xythum-near-perps\.testnet\fly\<app>.secrets.env
+fly secrets import --app <app> --stage < E:\github2\perp\xythum-near-perps\.testnet\fly\<app>.secrets.env
 fly deploy target/fly-stage --config target/fly-stage/fly.toml --app <app> --remote-only --ha=false --no-public-ips
 fly ips allocate-v4 --shared --app <app>
 fly ips allocate-v6 --app <app>
