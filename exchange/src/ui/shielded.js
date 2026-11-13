@@ -1,7 +1,10 @@
 import { PoolClient, poseidonPool } from '../protocol/shielded-pool.js';
-import { unlockConnectedTrader } from '../protocol/connected-wallet.js';
+import { unlockConnectedTrader, verifyWalletSignature } from '../protocol/connected-wallet.js';
 import { isAccountId } from '../protocol/api.js';
-import { btcToLots } from '../protocol/model.js';
+import { btcToLots, usdToCents } from '../protocol/model.js';
+import { toBase64 } from '../protocol/bytes.js';
+import { poolFundingAuthorization } from '../protocol/wallet-messages.js';
+import { createSpotChart } from './spot-chart.js';
 import './shielded.css';
 
 const money = (cents) => (cents / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -65,6 +68,11 @@ export async function mountShieldedPool(root) {
         <button class="xc-btn xc-btn--act" id="sp-connect" disabled>Connect Wallet</button>
       </div>
       <p class="sp-status" role="status" id="sp-status">Loading pool…</p>
+      <section class="sp-panel sp-chart" aria-labelledby="sp-chart-title">
+        <div class="sp-chart-head"><div><h2 id="sp-chart-title">BTC / USDT spot</h2><p id="sp-spot-meta" class="xc-small xc-muted"></p></div>
+          <strong id="sp-spot-price" class="xc-fig xc-fig--lg">—</strong></div>
+        <div id="sp-chart" class="xc-chart-host"></div>
+      </section>
       <div class="sp-grid" id="sp-desk" hidden>
         <section class="sp-panel" aria-labelledby="sp-funding">
           <h2 id="sp-funding">Collateral</h2>
@@ -72,6 +80,7 @@ export async function mountShieldedPool(root) {
             <div><dt>Public wallet</dt><dd><strong id="sp-wallet">—</strong> <small>mUSDC</small></dd></div>
             <div><dt>Shielded balance</dt><dd class="is-pos"><strong id="sp-balance">—</strong> <small>mUSDC</small></dd></div>
           </dl>
+          <button id="sp-fund" class="xc-btn xc-btn--act" type="button" hidden>Claim test funds</button>
           <form id="sp-deposit">
             <label>Deposit amount <input class="sp-input" name="amount" type="text" inputmode="decimal" required placeholder="0.00" autocomplete="off"></label>
             <button class="xc-btn xc-btn--act">Deposit to pool</button>
@@ -92,16 +101,18 @@ export async function mountShieldedPool(root) {
         <section class="sp-panel" aria-labelledby="sp-position">
           <h2 id="sp-position">BTC / USD Perpetual</h2>
           <dl class="sp-stats">
-            <div><dt>NEAR oracle mark</dt><dd><strong id="sp-mark">—</strong></dd></div>
+            <div><dt>Testnet settlement mark</dt><dd><strong id="sp-mark">—</strong></dd></div>
             <div><dt>Private margin</dt><dd class="is-pos"><strong id="sp-margin">—</strong> <small>mUSDC</small></dd></div>
           </dl>
           <form id="sp-open">
             <label>Margin <input class="sp-input" name="margin" type="text" inputmode="decimal" required placeholder="0.00" autocomplete="off"></label>
             <label>Size (BTC) <input class="sp-input" name="size" type="text" inputmode="decimal" required value="0.001" autocomplete="off"></label>
-            <button class="xc-btn xc-btn--act">Open private long</button>
+            <p id="sp-order-preview" class="xc-muted xc-small"></p>
+            <div class="sp-order-actions"><button class="xc-btn xc-btn--act" value="long">Open private long</button>
+              <button class="xc-btn xc-btn--ghost" id="sp-short" value="short" hidden>Open private short</button></div>
           </form>
-          <div id="sp-active" hidden><p id="sp-position-info"></p><button id="sp-close" class="xc-btn xc-btn--ghost">Close position</button></div>
-          <p class="xc-muted xc-small">Test assets · long only · maximum 3× leverage</p>
+          <div id="sp-active" hidden><p id="sp-position-info"></p><p id="sp-pnl" class="xc-small"></p><button id="sp-close" class="xc-btn xc-btn--ghost">Close position</button></div>
+          <p class="xc-muted xc-small">Test assets · maximum 3× leverage</p>
         </section>
         <section class="sp-panel sp-evidence" aria-labelledby="sp-evidence">
           <h2 id="sp-evidence">NEAR receipts</h2>
@@ -112,7 +123,8 @@ export async function mountShieldedPool(root) {
       </div>
     </main>`;
 
-  let config, wallet, account, client, data, desktopHelper = false, gasReady = false, working = false;
+  let config, wallet, account, client, data, desktopHelper = false, funding = false, gasReady = false, working = false;
+  createSpotChart(el('chart'), el('spot-meta'), el('spot-price'));
   const connect = el('connect');
   const status = el('status');
   const lock = () => {
@@ -121,7 +133,29 @@ export async function mountShieldedPool(root) {
     el('desk').hidden = !client;
     for (const element of el('desk').querySelectorAll('button, input')) element.disabled = working;
     for (const element of el('desk').querySelectorAll('form button, #sp-close')) element.disabled ||= !gasReady;
+    el('fund').hidden = !funding || !client || (gasReady && (data?.wallet || data?.balance || data?.position));
   };
+
+  function showOrderPreview() {
+    const preview = el('order-preview');
+    const mark = data?.state?.price_ticks;
+    if (!mark) return;
+    const { margin, size } = el('open').elements;
+    let lots;
+    try { lots = btcToLots(size.value); } catch { /* The input may be incomplete. */ }
+    if (!lots) {
+      preview.textContent = 'Enter a BTC size to see the required margin.';
+      return;
+    }
+    const notional = mark * lots;
+    const minimum = Math.ceil(notional / 3);
+    let cents;
+    try { cents = usdToCents(margin.value); } catch { /* Margin can be blank while editing. */ }
+    preview.textContent = '$' + money(notional) + ' notional � ' + money(minimum) + ' mUSDC minimum margin'
+      + (cents ? ' � ' + (notional / cents).toFixed(2) + '� leverage' : '');
+  }
+
+  el('open').addEventListener('input', showOrderPreview);
 
   function show() {
     if (!data) return;
@@ -132,8 +166,11 @@ export async function mountShieldedPool(root) {
     el('note-count').textContent = data.live.length + (data.live.length === 1 ? ' available note' : ' available notes');
     el('open').hidden = Boolean(data.position);
     el('active').hidden = !data.position;
+    showOrderPreview();
     if (data.position) {
-      el('position-info').textContent = 'Long ' + (data.position.lots / 1_000).toFixed(3) + ' BTC · entry $' + (data.position.entry * 10).toLocaleString('en-US');
+      el('position-info').textContent = (data.position.short ? 'Short ' : 'Long ') + (data.position.lots / 1_000).toFixed(3) + ' BTC · entry $' + (data.position.entry * 10).toLocaleString('en-US');
+      const pnl = Math.max(-data.position.margin, Math.min(60_000, (data.state.price_ticks - data.position.entry) * data.position.lots * (data.position.short ? -1 : 1)));
+      el('pnl').textContent = 'Estimated P&L ' + (pnl > 0 ? '+' : '') + money(pnl) + ' mUSDC at the testnet mark';
     }
   }
 
@@ -180,11 +217,11 @@ export async function mountShieldedPool(root) {
     }
     const trader = await unlockConnectedTrader(wallet, account, location.origin);
     let hashes;
-    if (config.proofVersion === 'poseidon-v1') {
-      const artifact = '/shielded/browser-pool/xythum_prover.js';
+    if (config.proofVersion) {
+      const artifact = '/shielded/' + (config.proofVersion === 'poseidon-v2' ? 'judge-pool' : 'browser-pool') + '/xythum_prover.js';
       const wasm = await import(/* @vite-ignore */ artifact);
       await wasm.default();
-      hashes = poseidonPool(wasm);
+      hashes = poseidonPool(wasm, config.proofVersion === 'poseidon-v2');
     }
     const next = new PoolClient({ account, wallet, trader, pool: config.pool, token: config.token, hashes,
       prove(kind, fingerprint, witness) {
@@ -195,7 +232,23 @@ export async function mountShieldedPool(root) {
     data = await next.initialize();
     gasReady = await next.gasReady();
     client = next;
+    if (funding && (!gasReady || !data.wallet && !data.balance && !data.position)) return 'Claim test funds to start trading.';
     return gasReady ? 'Private wallet unlocked · ' + account : 'Testnet gas is required for the private signer: ' + client.privateAccount;
+  });
+
+  el('fund').onclick = () => run('Approve the test funding request in your NEAR wallet…', async () => {
+    const traderKey = client.trader.signer.publicKey;
+    const expiresAt = Date.now() + 240_000;
+    const approval = await verifyWalletSignature(wallet, account,
+      await poolFundingAuthorization(location.origin, account, traderKey, expiresAt));
+    status.textContent = 'Sending test funds on NEAR…';
+    const response = await fetch('/api/pool/funding', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ account, publicKey: approval.publicKey, traderKey, signature: toBase64(approval.signature), expiresAt }),
+      signal: AbortSignal.timeout(120_000) });
+    const result = await response.json();
+    if (!response.ok || !result.funded) throw new Error(result.message || 'Test funding failed. Try again.');
+    gasReady = await client.gasReady();
+    return 'Test funds ready. Choose an amount to deposit.';
   });
 
   const tx = (pending, label, operation) => run(pending, async () => client.exclusive(async () => {
@@ -211,7 +264,8 @@ export async function mountShieldedPool(root) {
   el('open').onsubmit = (event) => {
     event.preventDefault();
     const { margin, size } = event.currentTarget.elements;
-    tx('Loading the spend proving key…', 'Private open', () => client.open(margin.value, btcToLots(size.value)));
+    const short = event.submitter?.value === 'short';
+    tx('Loading the spend proving key…', 'Private open', () => client.open(margin.value, btcToLots(size.value), short));
   };
   el('close').onclick = () => tx('Loading the close proving key…', 'Private close', () => client.close());
   el('exit').onsubmit = (event) => {
@@ -239,16 +293,20 @@ export async function mountShieldedPool(root) {
     }));
   };
   await run('Loading pool…', async () => {
-    const original = new URLSearchParams(location.search).get('pool') === 'legacy';
-    const response = await fetch(original ? '/shielded/config.json' : '/shielded/browser-pool/config.json',
+    const selected = new URLSearchParams(location.search).get('pool');
+    const original = selected === 'legacy';
+    const path = original ? '/shielded/config.json' : '/shielded/' + (selected === 'browser' ? 'browser-pool' : 'judge-pool') + '/config.json';
+    const response = await fetch(path,
       { signal: AbortSignal.timeout(10_000) });
     if (!response.ok) throw new Error('The shielded pool is unavailable on this host.');
     const deployment = await response.json();
     if (![deployment.pool, deployment.token].every(isAccountId)) throw new Error('Invalid shielded pool deployment.');
     config = deployment;
+    el('short').hidden = deployment.proofVersion !== 'poseidon-v2';
+    const health = await fetch('/api/health', { signal: AbortSignal.timeout(3_000) })
+      .then((response) => response.ok ? response.json() : null).catch(() => null);
+    funding = deployment.proofVersion === 'poseidon-v2' && health?.pool_funding === true;
     if (!deployment.proofVersion && location.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(location.hostname)) {
-      const health = await fetch('/api/health', { signal: AbortSignal.timeout(3_000) })
-        .then((response) => response.ok ? response.json() : null).catch(() => null);
       desktopHelper = health?.local_pool_prover === true;
     }
     el('contract').href = explorer + '/account/' + encodeURIComponent(config.pool);
