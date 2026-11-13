@@ -108,7 +108,7 @@ export function checkInvite(header, invite) {
   return given.length === invite.length && timingSafeEqual(given, invite);
 }
 
-export function createApp({ coordinator, config, poolProver, poolFunding, log = () => {} }) {
+export function createApp({ coordinator, config, poolProver, poolFunding, poolKeeperAck, log = () => {} }) {
   const distRoot = resolve(config.distDir);
   const admit = (req) => {
     if (!config.hosted) return;
@@ -120,6 +120,16 @@ export function createApp({ coordinator, config, poolProver, poolFunding, log = 
     }
   };
   const routes = {
+    'POST /api/pool/keeper-ack': async (req) => {
+      if (!poolKeeperAck) throw new HttpError(404, 'not_found', 'Keeper acknowledgments are unavailable on this host.');
+      if (req.headers.origin !== config.poolFundingOrigin || req.headers['sec-fetch-site'] !== 'same-origin') {
+        throw new HttpError(403, 'wallet_origin', 'Submit the keeper envelope from the exchange.');
+      }
+      const { pool, index, ...envelope } = await readJson(req, 1024) ?? {};
+      if (index !== 0 && index !== 1) throw new HttpError(400, 'invalid_keeper', 'Invalid keeper index.');
+      try { return [200, { acknowledgment: await poolKeeperAck(pool, index, envelope) }]; }
+      catch { throw new HttpError(422, 'keeper_ack', 'The keeper could not validate the encrypted position.'); }
+    },
     'POST /api/pool/funding': async (req) => {
       if (!poolFunding) throw new HttpError(404, 'not_found', 'Test funding is unavailable on this host.');
       if (req.headers.origin !== config.poolFundingOrigin || req.headers['sec-fetch-site'] !== 'same-origin') {
