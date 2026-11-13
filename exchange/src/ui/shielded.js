@@ -181,7 +181,7 @@ export async function mountShieldedPool(root) {
     const trader = await unlockConnectedTrader(wallet, account, location.origin);
     let hashes;
     if (config.proofVersion === 'poseidon-v1') {
-      const artifact = '/shielded/prover/xythum_prover.js';
+      const artifact = '/shielded/browser-pool/xythum_prover.js';
       const wasm = await import(/* @vite-ignore */ artifact);
       await wasm.default();
       hashes = poseidonPool(wasm);
@@ -239,7 +239,9 @@ export async function mountShieldedPool(root) {
     }));
   };
   await run('Loading pool…', async () => {
-    const response = await fetch('/shielded/config.json', { signal: AbortSignal.timeout(10_000) });
+    const original = new URLSearchParams(location.search).get('pool') === 'legacy';
+    const response = await fetch(original ? '/shielded/config.json' : '/shielded/browser-pool/config.json',
+      { signal: AbortSignal.timeout(10_000) });
     if (!response.ok) throw new Error('The shielded pool is unavailable on this host.');
     const deployment = await response.json();
     if (![deployment.pool, deployment.token].every(isAccountId)) throw new Error('Invalid shielded pool deployment.');

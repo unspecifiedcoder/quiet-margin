@@ -54,7 +54,6 @@ const STATIC_TYPES = {
 };
 export const PROVING_FILES = Object.freeze({ '/api/proving/open.pk': 'open.pk', '/api/proving/close.pk': 'close.pk' });
 const POOL_PROVING_FILES = Object.freeze({ '/api/proving/pool-spend.pk': 'spend.pk', '/api/proving/pool-close.pk': 'close.pk' });
-const BROWSER_POOL_PROVING_FILES = Object.freeze({ '/api/proving/browser-pool-spend.pk': 'spend.pk', '/api/proving/browser-pool-close.pk': 'close.pk' });
 
 function sendJson(res, status, body, headers = {}) {
   const data = Buffer.from(JSON.stringify(body));
@@ -191,6 +190,9 @@ export function createApp({ coordinator, config, poolProver, log = () => {} }) {
     if (decoded.includes('\0') || decoded.split(/[\\/]/).some((segment) => segment.startsWith('.'))) return false;
     const target = resolve(join(distRoot, decoded));
     if (target !== distRoot && !target.startsWith(distRoot + sep)) return false;
+    if (/^\/shielded\/browser-pool\/(spend|close)\.pk$/.test(decoded)) {
+      return sendFile(res, target, 'application/octet-stream', 'no-cache');
+    }
     const type = STATIC_TYPES[extname(target).toLowerCase()];
     if (type && await sendFile(res, target, type, 'no-cache')) return true;
     // Single-page fallback for client routes without a file extension.
@@ -214,12 +216,11 @@ export function createApp({ coordinator, config, poolProver, log = () => {} }) {
         const [code, body] = await routes[key](req);
         status = code;
         sendJson(res, code, body);
-      } else if (req.method === 'GET' && (PROVING_FILES[pathname] || POOL_PROVING_FILES[pathname] || BROWSER_POOL_PROVING_FILES[pathname])) {
+      } else if (req.method === 'GET' && (PROVING_FILES[pathname] || POOL_PROVING_FILES[pathname])) {
         route = 'GET ' + pathname;
         // Fixed file names only: the proving directory itself is never browsable.
-        const directory = BROWSER_POOL_PROVING_FILES[pathname] ? config.browserPoolProvingDir
-          : POOL_PROVING_FILES[pathname] ? config.poolProvingDir : config.provingDir;
-        const file = PROVING_FILES[pathname] ?? POOL_PROVING_FILES[pathname] ?? BROWSER_POOL_PROVING_FILES[pathname];
+        const directory = POOL_PROVING_FILES[pathname] ? config.poolProvingDir : config.provingDir;
+        const file = PROVING_FILES[pathname] ?? POOL_PROVING_FILES[pathname];
         const served = directory && await sendFile(res, join(directory, file),
           'application/octet-stream', 'no-cache');
         status = served ? 200 : 404;

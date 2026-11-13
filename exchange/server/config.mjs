@@ -122,7 +122,6 @@ export function loadConfig(env = process.env) {
     sessionDir: env.XYTHUM_SESSION_DIR || join(TESTNET_DIR, 'exchange-sessions'),
     provingDir: env.XYTHUM_PROVING_DIR || join(TESTNET_DIR, 'proving'),
     poolProvingDir: env.XYTHUM_POOL_PROVING_DIR || join(TESTNET_DIR, 'shielded', 'keys'),
-    browserPoolProvingDir: env.XYTHUM_BROWSER_POOL_PROVING_DIR || join(TESTNET_DIR, 'shielded', 'browser-keys'),
     localPoolProverBin: hosted ? null : env.XYTHUM_LOCAL_POOL_PROVER || null,
     marketWasm: env.MARKET_WASM || join(REPO_ROOT, 'target', 'near', 'xythum_near_perps.wasm'),
     marketWasmSha256: wasmPin,

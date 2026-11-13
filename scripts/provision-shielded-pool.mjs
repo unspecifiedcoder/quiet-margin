@@ -106,5 +106,8 @@ if (!record.wallet_funding && Number(await view(token, 'ft_balance_of', { accoun
 const data = { pool, token, spendVk: keys.spend.fingerprint, closeVk: keys.close.fingerprint };
 if (browserPool) data.proofVersion = 'poseidon-v1';
 mkdirSync(file('exchange/public/shielded/'), { recursive: true });
-writeFileSync(file('exchange/public/shielded/config.json'), JSON.stringify(data, null, 2) + '\n');
+// Browser artifacts for a new deployment must be published together. Keep its
+// generated config beside its keys until the operator stages the static bundle.
+const configPath = browserPool ? '.testnet/shielded/browser-keys/config.json' : 'exchange/public/shielded/config.json';
+writeFileSync(file(configPath), JSON.stringify(data, null, 2) + '\n');
 console.log(JSON.stringify(record, null, 2));

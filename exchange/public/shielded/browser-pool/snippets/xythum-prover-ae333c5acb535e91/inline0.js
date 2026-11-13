@@ -1,0 +1,1 @@
+export function xythum_now_ms() { const p = globalThis.performance; return p && typeof p.now === 'function' ? p.now() : Date.now(); }

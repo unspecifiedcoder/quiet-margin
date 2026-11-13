@@ -1,0 +1,7 @@
+{
+  "pool": "browser-pool.qm-treasury-a280bef3.testnet",
+  "token": "musdc.qm-treasury-a280bef3.testnet",
+  "spendVk": "cGRJP3WxpFj+osWXSdziilTgvX8h7grQ5m7ojKh6NJk=",
+  "closeVk": "PgxnBQ4QoqwSORD4YTJvzRQpwNifso2j0Mf2IHhY5to=",
+  "proofVersion": "poseidon-v1"
+}
