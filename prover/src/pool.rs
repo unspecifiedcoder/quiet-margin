@@ -55,11 +55,25 @@ pub struct Note {
     pub salt: Hash,
 }
 
-#[derive(Clone, Default, Deserialize, Serialize)]
-pub struct Input {
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(bound(
+    serialize = "[Hash; D]: Serialize, [bool; D]: Serialize",
+    deserialize = "[Hash; D]: Deserialize<'de>, [bool; D]: Deserialize<'de>"
+))]
+pub struct Input<const D: usize = DEPTH> {
     pub note: Note,
-    pub siblings: [Hash; DEPTH],
-    pub right: [bool; DEPTH],
+    pub siblings: [Hash; D],
+    pub right: [bool; D],
+}
+
+impl<const D: usize> Default for Input<D> {
+    fn default() -> Self {
+        Self {
+            note: Note::default(),
+            siblings: [[0; 32]; D],
+            right: [false; D],
+        }
+    }
 }
 
 fn note_vars(
@@ -116,11 +130,15 @@ fn add_membership(
 }
 
 #[derive(Clone, Default, Deserialize, Serialize)]
-pub struct Spend {
+#[serde(bound(
+    serialize = "Input<D>: Serialize",
+    deserialize = "Input<D>: Deserialize<'de>"
+))]
+pub struct Spend<const D: usize = DEPTH> {
     pub domain: Hash,
     pub root: Hash,
     pub owner: Hash,
-    pub inputs: [Input; 2],
+    pub inputs: [Input<D>; 2],
     pub two_inputs: bool,
     pub context: Hash,
     pub blinder: Hash,
@@ -130,6 +148,8 @@ pub struct Spend {
     pub change: Note,
     pub withdraw: u64,
     pub recipient: Hash,
+    #[serde(default)]
+    pub short: bool,
 }
 
 impl Spend {
@@ -321,6 +341,8 @@ pub struct Close {
     pub price: u16,
     pub round: u64,
     pub payout: Note,
+    #[serde(default)]
+    pub short: bool,
 }
 
 impl Close {

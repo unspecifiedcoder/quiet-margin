@@ -39,13 +39,20 @@ fn packed_position(lots: u16, entry: u16, margin: u32) -> u64 {
     u64::from(lots) | (u64::from(entry) << 16) | (u64::from(margin) << 32)
 }
 
-pub fn commitment(context: &Hash, blinder: &Hash, lots: u16, entry: u16, margin: u32) -> Hash {
+pub fn commitment(
+    context: &Hash,
+    blinder: &Hash,
+    lots: u16,
+    entry: u16,
+    margin: u32,
+    short: bool,
+) -> Hash {
     encode(hash(
         h::POSITION,
         &[
             field(context),
             field(blinder),
-            Fr::from(packed_position(lots, entry, margin)),
+            Fr::from(packed_position(lots, entry, margin)) + Fr::from(u128::from(short) << 64),
         ],
     ))
 }
@@ -71,9 +78,9 @@ fn note_vars(
     Ok((leaf, value))
 }
 
-fn member(
+fn member<const D: usize>(
     cs: &ConstraintSystemRef<Fr>,
-    input: &Input,
+    input: &Input<D>,
     domain: &Var,
     owner: &Var,
     tag: &Var,
@@ -107,6 +114,7 @@ fn position_vars(
     lots: u16,
     entry: u16,
     margin: u32,
+    short: &Boolean<Fr>,
 ) -> Result<(Var, Var, Var, Var), SynthesisError> {
     let lots = Var::new_witness(cs.clone(), || Ok(Fr::from(lots)))?;
     let entry = Var::new_witness(cs.clone(), || Ok(Fr::from(entry)))?;
@@ -122,7 +130,10 @@ fn position_vars(
     )?;
     enforce_bits(cs, &(&margin * Fr::from(3u64) - &entry * &lots), 48)?;
     let blinder = Var::new_witness(cs.clone(), || Ok(field(blinder)))?;
-    let packed = &lots + &entry * Fr::from(1u64 << 16) + &margin * Fr::from(1u64 << 32);
+    let packed = &lots
+        + &entry * Fr::from(1u64 << 16)
+        + &margin * Fr::from(1u64 << 32)
+        + Boolean::le_bits_to_fp(std::slice::from_ref(short))? * Fr::from(1u128 << 64);
     Ok((
         hash_var(cs, h::POSITION, vec![context, blinder, packed])?,
         lots,
@@ -139,9 +150,9 @@ fn bind_note(leaf: Var, cents: &Var, output: &Var) -> Result<(), SynthesisError>
 }
 
 #[derive(Default)]
-pub struct FastSpend(pub Spend);
+pub struct FastSpend<const D: usize = 4>(pub Spend<D>);
 
-impl FastSpend {
+impl<const D: usize> FastSpend<D> {
     pub fn public(&self) -> Vec<Hash> {
         let w = &self.0;
         let fields = |note: &Note| note_fields(&w.domain, &w.owner, note);
@@ -159,7 +170,14 @@ impl FastSpend {
             if exit {
                 w.recipient
             } else {
-                commitment(&w.context, &w.blinder, w.lots, w.entry, w.margin)
+                commitment(
+                    &w.context,
+                    &w.blinder,
+                    w.lots,
+                    w.entry,
+                    w.margin,
+                    D == 6 && w.short,
+                )
             },
             if w.change.cents != 0 { change } else { ZERO },
             if exit { ZERO } else { w.context },
@@ -171,7 +189,7 @@ impl FastSpend {
     }
 }
 
-impl ConstraintSynthesizer<Fr> for FastSpend {
+impl<const D: usize> ConstraintSynthesizer<Fr> for FastSpend<D> {
     fn generate_constraints(self, cs: ConstraintSystemRef<Fr>) -> Result<(), SynthesisError> {
         let p = allocate(&cs, &self.public())?;
         let w = self.0;
@@ -205,8 +223,20 @@ impl ConstraintSynthesizer<Fr> for FastSpend {
 
         enforce_bits(&cs, &p[10], 64)?;
         let exit = p[10].is_neq(&Var::zero())?;
-        let (commitment, lots, entry, margin) =
-            position_vars(&cs, p[6].clone(), &w.blinder, w.lots, w.entry, w.margin)?;
+        let short = if D == 6 {
+            Boolean::new_witness(cs.clone(), || Ok(w.short))?
+        } else {
+            Boolean::FALSE
+        };
+        let (commitment, lots, entry, margin) = position_vars(
+            &cs,
+            p[6].clone(),
+            &w.blinder,
+            w.lots,
+            w.entry,
+            w.margin,
+            &short,
+        )?;
         // The recipient occupies the commitment slot on exits and is supplied by the contract.
         commitment.conditional_enforce_equal(&p[4], &!exit.clone())?;
         // Bind the recipient public input even for circuits compiled without a witness.
@@ -225,31 +255,56 @@ impl ConstraintSynthesizer<Fr> for FastSpend {
 }
 
 #[derive(Default)]
-pub struct FastClose(pub Close);
+pub struct FastClose<const SIDES: bool = false>(pub Close);
 
-impl FastClose {
+impl<const SIDES: bool> FastClose<SIDES> {
     pub fn public(&self) -> Vec<Hash> {
         let w = &self.0;
         let [_, leaf, _, tag] = note_fields(&w.domain, &w.owner, &w.payout);
         vec![
-            commitment(&w.context, &w.blinder, w.lots, w.entry, w.margin),
+            commitment(
+                &w.context,
+                &w.blinder,
+                w.lots,
+                w.entry,
+                w.margin,
+                SIDES && w.short,
+            ),
             w.context,
             w.domain,
             tag,
             if w.payout.cents != 0 { leaf } else { ZERO },
             crate::encoding::u64_scalar(u64::from(w.price)),
             crate::encoding::u64_scalar(w.round),
-            crate::encoding::u64_scalar(w.maker_delta()),
+            crate::encoding::u64_scalar(if SIDES && w.short {
+                let pnl = (i64::from(w.entry) - i64::from(w.price)) * i64::from(w.lots);
+                let payout = (i64::from(w.margin) + pnl.min(i64::from(PNL_CAP_CENTS))).max(0);
+                (i64::from(PNL_CAP_CENTS) + i64::from(w.margin) - payout) as u64
+            } else {
+                w.maker_delta()
+            }),
         ]
     }
 }
 
-impl ConstraintSynthesizer<Fr> for FastClose {
+impl<const SIDES: bool> ConstraintSynthesizer<Fr> for FastClose<SIDES> {
     fn generate_constraints(self, cs: ConstraintSystemRef<Fr>) -> Result<(), SynthesisError> {
         let p = allocate(&cs, &self.public())?;
         let w = self.0;
-        let (commitment, lots, entry, margin) =
-            position_vars(&cs, p[1].clone(), &w.blinder, w.lots, w.entry, w.margin)?;
+        let short = if SIDES {
+            Boolean::new_witness(cs.clone(), || Ok(w.short))?
+        } else {
+            Boolean::FALSE
+        };
+        let (commitment, lots, entry, margin) = position_vars(
+            &cs,
+            p[1].clone(),
+            &w.blinder,
+            w.lots,
+            w.entry,
+            w.margin,
+            &short,
+        )?;
         commitment.enforce_equal(&p[0])?;
         let owner = Var::new_witness(cs.clone(), || Ok(field(&w.owner)))?;
         let tag = hash_var(&cs, h::OWNER, vec![p[2].clone(), owner])?;
@@ -258,7 +313,12 @@ impl ConstraintSynthesizer<Fr> for FastClose {
         bind_note(leaf, &cents, &p[4])?;
         enforce_bits(&cs, &p[5], 16)?;
         enforce_bits(&cs, &p[6], 64)?;
-        let pnl = (&p[5] - entry) * lots;
+        let movement = &p[5] - entry;
+        let pnl = if SIDES {
+            short.select(&(Var::zero() - &movement), &movement)? * lots
+        } else {
+            movement * lots
+        };
         let cap = Var::Constant(Fr::from(PNL_CAP_CENTS));
         let excess = max_zero(&cs, &(&pnl - &cap))?;
         cents.enforce_equal(&max_zero(&cs, &(&margin + pnl - excess))?)?;
@@ -269,6 +329,7 @@ impl ConstraintSynthesizer<Fr> for FastClose {
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 pub(crate) fn prove_json<S: crate::browser::KeySource + ?Sized>(
     kind: &str,
+    version: &str,
     key: &S,
     fingerprint: &str,
     input: &str,
@@ -284,12 +345,21 @@ pub(crate) fn prove_json<S: crate::browser::KeySource + ?Sized>(
     };
     let key = crate::browser::load_key_for_inputs(key, count, kind, fingerprint)?;
     key_loaded();
-    let (proof, proving_ms) = if kind == "spend" {
-        let w = FastSpend(serde_json::from_str(input).map_err(|_| "Invalid spend input.")?);
+    let (proof, proving_ms) = if kind == "spend" && version == "poseidon-v2" {
+        let w = FastSpend::<6>(serde_json::from_str(input).map_err(|_| "Invalid spend input.")?);
+        let public = w.public();
+        crate::api::timed_prove(&key, w, &public)
+    } else if kind == "spend" {
+        let w = FastSpend::<4>(serde_json::from_str(input).map_err(|_| "Invalid spend input.")?);
+        let public = w.public();
+        crate::api::timed_prove(&key, w, &public)
+    } else if version == "poseidon-v2" {
+        let w = FastClose::<true>(serde_json::from_str(input).map_err(|_| "Invalid close input.")?);
         let public = w.public();
         crate::api::timed_prove(&key, w, &public)
     } else {
-        let w = FastClose(serde_json::from_str(input).map_err(|_| "Invalid close input.")?);
+        let w =
+            FastClose::<false>(serde_json::from_str(input).map_err(|_| "Invalid close input.")?);
         let public = w.public();
         crate::api::timed_prove(&key, w, &public)
     }

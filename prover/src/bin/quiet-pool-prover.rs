@@ -47,8 +47,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         [command, dir] if command == "setup-browser" => {
             let dir = Path::new(dir);
             fs::create_dir(dir)?;
-            setup(dir, "spend", FastSpend::default())?;
-            setup(dir, "close", FastClose::default())?;
+            setup(dir, "spend", FastSpend::<4>::default())?;
+            setup(dir, "close", FastClose::<false>::default())?;
+        }
+        [command, dir] if command == "setup-judge" => {
+            let dir = Path::new(dir);
+            fs::create_dir(dir)?;
+            setup(dir, "spend", FastSpend::<6>::default())?;
+            setup(dir, "close", FastClose::<true>::default())?;
         }
         [command, source, output] if command == "uncompress" => {
             let file = std::fs::File::open(source)?;

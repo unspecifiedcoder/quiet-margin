@@ -107,13 +107,47 @@ fn close_returns_the_margin_at_an_unchanged_mark() {
         margin: open.margin,
         price: open.entry,
         round: 1,
+        short: false,
         payout: Note {
             cents: 3000,
             salt: [10; 32],
         },
     };
-    assert!(satisfied(FastClose(close.clone())));
+    assert!(satisfied(FastClose::<false>(close.clone())));
     let mut inflated = close;
     inflated.payout.cents += 1;
-    assert!(!satisfied(FastClose(inflated)));
+    assert!(!satisfied(FastClose::<false>(inflated)));
+}
+
+#[test]
+fn a_short_gains_when_the_mark_falls_and_loses_when_it_rises() {
+    let open = spend();
+    let mut close = Close {
+        domain: open.domain,
+        owner: open.owner,
+        context: open.context,
+        blinder: open.blinder,
+        lots: 1,
+        entry: 6880,
+        margin: 3000,
+        price: 6780,
+        round: 2,
+        short: true,
+        payout: Note {
+            cents: 3100,
+            salt: [10; 32],
+        },
+    };
+    let short_commitment = FastClose::<true>(close.clone()).public()[0];
+    assert!(satisfied(FastClose::<true>(close.clone())));
+    close.short = false;
+    assert_ne!(
+        FastClose::<true>(close.clone()).public()[0],
+        short_commitment
+    );
+    assert!(!satisfied(FastClose::<true>(close.clone())));
+    close.short = true;
+    close.price = 6980;
+    close.payout.cents = 2900;
+    assert!(satisfied(FastClose::<true>(close)));
 }
