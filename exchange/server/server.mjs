@@ -12,6 +12,7 @@ import { createApp } from './app.mjs';
 import { loadConfig, TESTNET_DIR } from './config.mjs';
 import { Coordinator } from './coordinator.mjs';
 import { createMarketData } from './market-data.mjs';
+import { createLocalPoolProver } from './local-pool-prover.mjs';
 import { SessionStore } from './store.mjs';
 import { codeHashOf, connectTestnet, takeCredentials } from './testnet.mjs';
 import { safeMessage } from './util.mjs';
@@ -59,7 +60,7 @@ async function main() {
     actors,
   });
   const worker = new KeeperWorker({ coordinator, intervalMs: config.keeperPollMs, log });
-  const server = createServer(createApp({ coordinator, config, log }));
+  const server = createServer(createApp({ coordinator, config, poolProver: createLocalPoolProver(config), log }));
   // Session setup waits for several final transactions while the client waits.
   server.requestTimeout = 15 * 60_000;
   server.headersTimeout = 60_000;

@@ -48,6 +48,31 @@ const post = (path, body, token, headers = {}) => fetch(base + path, {
   body: typeof body === 'string' ? body : JSON.stringify(body),
 });
 
+test('local pool helper requires explicit loopback setup and a same-origin browser request', async () => {
+  const route = '/api/proving/local-pool';
+  assert.equal((await post(route, {})).status, 404);
+  const inputs = [];
+  const local = createServer(createApp({ coordinator: h.coordinator, config: h.config,
+    poolProver: async (input) => { inputs.push(input); return { proof: 'test-proof' }; } }));
+  await new Promise((resolve) => local.listen(0, '127.0.0.1', resolve));
+  const origin = 'http://127.0.0.1:' + local.address().port;
+  const input = { kind: 'spend', fingerprint: 'mock', witness: { fixture: 'private' } };
+  const request = (source, site, body = input) => fetch(origin + route, { method: 'POST', body: JSON.stringify(body),
+    headers: { 'Content-Type': 'application/json', Origin: source, 'Sec-Fetch-Site': site } });
+  try {
+    assert.equal((await request('https://example.com', 'cross-site')).status, 403);
+    assert.equal((await request(origin, 'cross-site')).status, 403);
+    assert.equal((await request(origin, 'same-origin', 'x'.repeat(21_000))).status, 413);
+    const accepted = await request(origin, 'same-origin');
+    assert.equal(accepted.status, 200);
+    assert.equal(accepted.headers.get('cache-control'), 'no-store');
+    assert.deepEqual(await accepted.json(), { proof: 'test-proof' });
+    assert.deepEqual(inputs, [input]);
+  } finally {
+    await new Promise((resolve) => local.close(resolve));
+  }
+});
+
 test('refresh requires the bearer and an exact empty object', async () => {
   const created = await (await post('/api/sessions', enrollment())).json();
   assert.equal((await post('/api/session/refresh', {})).status, 401);

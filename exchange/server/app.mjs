@@ -64,17 +64,17 @@ function sendJson(res, status, body, headers = {}) {
   res.end(data);
 }
 
-async function readJson(req) {
+async function readJson(req, limit = BODY_LIMIT) {
   if (!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type'] ?? '')) {
     throw new HttpError(415, 'content_type', 'expected application/json');
   }
   const declared = Number(req.headers['content-length'] ?? 0);
-  if (declared > BODY_LIMIT) throw new HttpError(413, 'body_too_large', 'request body is too large');
+  if (declared > limit) throw new HttpError(413, 'body_too_large', 'request body is too large');
   const chunks = [];
   let size = 0;
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > BODY_LIMIT) throw new HttpError(413, 'body_too_large', 'request body is too large');
+    if (size > limit) throw new HttpError(413, 'body_too_large', 'request body is too large');
     chunks.push(chunk);
   }
   try {
@@ -108,7 +108,7 @@ export function checkInvite(header, invite) {
   return given.length === invite.length && timingSafeEqual(given, invite);
 }
 
-export function createApp({ coordinator, config, log = () => {} }) {
+export function createApp({ coordinator, config, poolProver, log = () => {} }) {
   const distRoot = resolve(config.distDir);
   const admit = (req) => {
     if (!config.hosted) return;
@@ -120,6 +120,16 @@ export function createApp({ coordinator, config, log = () => {} }) {
     }
   };
   const routes = {
+    'POST /api/proving/local-pool': async (req) => {
+      if (!poolProver || config.hosted) throw new HttpError(404, 'not_found', 'local proof helper is unavailable');
+      const origin = req.headers.origin;
+      if (!/^http:\/\/(?:127\.0\.0\.1|localhost|\[::1\]):\d+$/.test(origin ?? '')
+        || origin.slice(7) !== req.headers.host || req.headers['sec-fetch-site'] !== 'same-origin') {
+        throw new HttpError(403, 'local_origin', 'proof requests must come from the local exchange');
+      }
+      const { kind, fingerprint, witness } = await readJson(req, 21_000) ?? {};
+      return [200, await poolProver({ kind, fingerprint, witness })];
+    },
     'POST /api/faucet/claim': async (req) => {
       admit(req);
       if (!config.walletFaucet) throw new HttpError(503, 'faucet_disabled', 'wallet funding is unavailable');
@@ -164,6 +174,7 @@ export function createApp({ coordinator, config, log = () => {} }) {
     'GET /api/health': async () => [200, {
       ok: true, chain_id: 'testnet', sessions: coordinator.store.size, session_quota: config.sessionQuota,
       ...(config.walletFaucet && !config.hosted && { connected_wallet: true }),
+      ...(poolProver && !config.hosted && { local_pool_prover: true }),
     }],
   };
 

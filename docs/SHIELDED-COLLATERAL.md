@@ -90,5 +90,17 @@ is about 862 MB and the close key about 183 MB. These files are generated
 locally and are outside Git. Use a desktop browser with enough free memory
 to load the key and construct the proof.
 
+### Local desktop prover
+
+For machines where the full spend circuit is too slow in Wasm, build
+`quiet-pool-prover` in release mode and set `XYTHUM_LOCAL_POOL_PROVER` to the
+absolute binary path before starting the exchange server. Point
+`XYTHUM_POOL_PROVING_DIR` at the folder containing both `.pk` and `.vk` files.
+Open the exchange on its HTTP loopback address. The page shows when the
+desktop helper is active. It receives the witness on the same machine and
+returns a proof. The wallet key and transaction signing stay in the browser.
+Hosted deployments use the browser worker. The desktop helper is disabled on
+non-loopback binds and accepts only same-origin browser requests.
+
 [NEP-141](https://github.com/near/NEPs/blob/master/neps/nep-0141.md) ·
 [Original market and keeper](FUNDED-MARKET.md)

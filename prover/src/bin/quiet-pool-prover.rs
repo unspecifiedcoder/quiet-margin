@@ -56,13 +56,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             key.serialize_uncompressed(&mut writer)?;
             writer.flush()?;
         }
-        [command, dir, kind]
+        [command, dir, kind] | [command, dir, kind, _]
             if command == "prove" && ["spend", "close"].contains(&kind.as_str()) =>
         {
             let dir = Path::new(dir);
             let key = fs::read(dir.join(format!("{kind}.pk")))?;
             let vk = fs::read(dir.join(format!("{kind}.vk")))?;
             let fingerprint = STANDARD.encode(sha256(&[&vk]));
+            if args.get(3).is_some_and(|expected| expected != &fingerprint) {
+                return Err("Pool verifying key fingerprint differs from the requested deployment.".into());
+            }
             let mut input = String::new();
             std::io::stdin().take(20_001).read_to_string(&mut input)?;
             println!(
@@ -71,7 +74,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
         _ => return Err(
-            "Usage: quiet-pool-prover setup DIR | prove DIR spend|close | uncompress SOURCE OUTPUT"
+            "Usage: quiet-pool-prover setup DIR | prove DIR spend|close [VK_FINGERPRINT] | uncompress SOURCE OUTPUT"
                 .into(),
         ),
     }

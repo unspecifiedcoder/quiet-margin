@@ -27,6 +27,17 @@ function localProof(kind, fingerprint, witness) {
   });
 }
 
+async function helperProof(kind, fingerprint, witness) {
+  el('status').textContent = 'Generating proof with the local desktop helper…';
+  const response = await fetch('/api/proving/local-pool', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ kind, fingerprint, witness }), signal: AbortSignal.timeout(12 * 60_000),
+  });
+  const result = await response.json();
+  if (!response.ok || typeof result.proof !== 'string') throw new Error(result.message || 'The local proof helper failed.');
+  return result.proof;
+}
+
 function receipt(list, label, hash) {
   const li = document.createElement('li');
   const a = document.createElement('a');
@@ -101,7 +112,7 @@ export async function mountShieldedPool(root) {
       </div>
     </main>`;
 
-  let config, wallet, account, client, data, gasReady = false, working = false;
+  let config, wallet, account, client, data, desktopHelper = false, gasReady = false, working = false;
   const connect = el('connect');
   const status = el('status');
   const lock = () => {
@@ -172,7 +183,7 @@ export async function mountShieldedPool(root) {
       prove(kind, fingerprint, witness) {
         const expected = kind === 'spend' ? config.spendVk : config.closeVk;
         if (fingerprint !== expected) throw new Error('The pool verifying key differs from this deployment.');
-        return localProof(kind, fingerprint, witness);
+        return desktopHelper ? helperProof(kind, fingerprint, witness) : localProof(kind, fingerprint, witness);
       } });
     data = await next.initialize();
     gasReady = await next.gasReady();
@@ -226,7 +237,12 @@ export async function mountShieldedPool(root) {
     const deployment = await response.json();
     if (![deployment.pool, deployment.token].every(isAccountId)) throw new Error('Invalid shielded pool deployment.');
     config = deployment;
+    if (location.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(location.hostname)) {
+      const health = await fetch('/api/health', { signal: AbortSignal.timeout(3_000) })
+        .then((response) => response.ok ? response.json() : null).catch(() => null);
+      desktopHelper = health?.local_pool_prover === true;
+    }
     el('contract').href = explorer + '/account/' + encodeURIComponent(config.pool);
-    return 'Connect your NEAR testnet wallet to begin.';
+    return 'Connect your NEAR testnet wallet to begin.' + (desktopHelper ? ' Local desktop prover enabled.' : '');
   });
 }
