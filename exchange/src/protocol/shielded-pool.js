@@ -36,11 +36,11 @@ async function shaBranches(row) {
   return Promise.all(next);
 }
 
-export async function merklePath(leaves, index, branches = shaBranches) {
-  if (leaves.length > 2 ** DEPTH || index < 0 || index >= leaves.length) throw new Error('The note is absent from this root.');
-  let row = Array.from({ length: 2 ** DEPTH }, (_, i) => leaves[i] ? bytes(leaves[i]) : ZERO);
+export async function merklePath(leaves, index, branches = shaBranches, depth = DEPTH) {
+  if (leaves.length > 2 ** depth || index < 0 || index >= leaves.length) throw new Error('The note is absent from this root.');
+  let row = Array.from({ length: 2 ** depth }, (_, i) => leaves[i] ? bytes(leaves[i]) : ZERO);
   const siblings = [], right = [];
-  for (let level = 0; level < DEPTH; level += 1) {
+  for (let level = 0; level < depth; level += 1) {
     siblings.push(list(row[index ^ 1]));
     right.push(Boolean(index & 1));
     row = await branches(row);
@@ -49,7 +49,7 @@ export async function merklePath(leaves, index, branches = shaBranches) {
   return { siblings, right, root: toBase64(row[0]) };
 }
 
-export function poseidonPool(wasm) {
+export function poseidonPool(wasm, sides = false) {
   const call = (operation, args) => JSON.parse(wasm.pool_hash(operation, JSON.stringify(args)));
   return {
     noteFields(domain, owner, note) {
@@ -62,8 +62,10 @@ export function poseidonPool(wasm) {
       for (let i = 0; i < row.length; i += 2) pairs.push([list(row[i]), list(row[i + 1])]);
       return call('branches', pairs).map((value) => Uint8Array.from(value));
     },
-    commitment(context, blinder, lots, entry, margin) {
-      return Uint8Array.from(call('position', [list(context), list(blinder), lots, entry, margin]));
+    commitment(context, blinder, lots, entry, margin, short) {
+      const args = [list(context), list(blinder), lots, entry, margin];
+      if (sides) args.push(short);
+      return Uint8Array.from(call(sides ? 'judge_position' : 'position', args));
     },
   };
 }
@@ -90,7 +92,8 @@ export class PoolClient {
     await this.exclusive(() => this.chain.resolveJournal());
     const state = await this.state();
     if (state.token !== this.token) throw new Error('This pool uses a different token.');
-    if ((state.proof_version === 'poseidon-v1') !== Boolean(this.hashes)) throw new Error('The pool proof version differs from this deployment.');
+    if (['poseidon-v1', 'poseidon-v2'].includes(state.proof_version) !== Boolean(this.hashes)) throw new Error('The pool proof version differs from this deployment.');
+    this.depth = state.proof_version === 'poseidon-v2' ? 6 : DEPTH;
     this.domain = bytes(state.domain);
     this.owner = await sha256(await signer.sign(concat(utf8('Quiet Margin private collateral v2:'), this.domain)));
     return this.read();
@@ -200,11 +203,11 @@ export class PoolClient {
     const change = note(chosen.reduce((sum, n) => sum + n.note.cents, 0) - cents);
     const changeLeaf = change.cents ? (await this.noteFields(change)).leaf : ZERO_TEXT;
     const inputs = await Promise.all(chosen.map(async (n) => {
-      const path = await merklePath(view.state.leaves, view.state.leaves.indexOf(n.leaf), this.hashes?.branches);
+      const path = await merklePath(view.state.leaves, view.state.leaves.indexOf(n.leaf), this.hashes?.branches, this.depth);
       if (path.root !== view.state.root) throw new Error('The pool root could not be verified.');
       return { note: n.note, siblings: path.siblings, right: path.right };
     }));
-    if (inputs.length === 1) inputs.push({ note: { cents: 0, salt: list(ZERO) }, siblings: Array.from({ length: DEPTH }, () => list(ZERO)), right: Array(DEPTH).fill(false) });
+    if (inputs.length === 1) inputs.push({ note: { cents: 0, salt: list(ZERO) }, siblings: Array.from({ length: this.depth }, () => list(ZERO)), right: Array(this.depth).fill(false) });
     if (change.cents) view.records.notes.push(change);
     const witness = { domain: list(this.domain), root: list(bytes(view.state.root)), owner: list(this.owner),
       inputs, two_inputs: chosen.length === 2, change };
@@ -212,7 +215,8 @@ export class PoolClient {
     return { view, witness, args };
   }
 
-  async open(value, lots = 1) {
+  async open(value, lots = 1, short = false) {
+    if (short && this.depth !== 6) throw new Error('Shorts require the judge pool.');
     const margin = usdToCents(value, { max: 60_000 });
     const { view, witness, args } = await this.prepareSpend(margin);
     const entry = view.state.price_ticks;
@@ -221,14 +225,14 @@ export class PoolClient {
     }
     const context = randomBytes(32), blinder = randomBytes(32);
     if (this.hashes) context[31] &= 0x3f;
-    const commitment = toBase64(this.hashes ? this.hashes.commitment(context, blinder, lots, entry, margin)
+    const commitment = toBase64(this.hashes ? this.hashes.commitment(context, blinder, lots, entry, margin, short)
       : await sha256(context, blinder, two(lots), two(entry), integer(margin, 4)));
-    const position = { commitment, context: list(context), blinder: list(blinder), entry, lots, margin };
+    const position = { commitment, context: list(context), blinder: list(blinder), entry, lots, margin, short };
     view.records.positions.push(position);
     await this.save(view.records);
     const { tag } = await this.noteFields(witness.change);
     const proof = await this.prove('spend', view.state.spend_vk_sha256, {
-      ...witness, context: position.context, blinder: position.blinder, lots, entry, margin, withdraw: 0, recipient: list(ZERO),
+      ...witness, context: position.context, blinder: position.blinder, lots, entry, margin, short, withdraw: 0, recipient: list(ZERO),
     });
     return this.call('open_private', { ...args, commitment, context: toBase64(context), owner_tag: tag, entry_ticks: entry, proof });
   }
@@ -236,7 +240,7 @@ export class PoolClient {
   async close() {
     const { position, records, state } = await this.read();
     if (!position) throw new Error('No position is available to close in this wallet.');
-    const pnl = Math.min((state.price_ticks - position.entry) * position.lots, 60_000);
+    const pnl = Math.min((state.price_ticks - position.entry) * position.lots * (position.short ? -1 : 1), 60_000);
     const payout = note(Math.max(0, position.margin + pnl));
     const maker_credit = 60_000 + position.margin - payout.cents;
     const leaf = payout.cents ? (await this.noteFields(payout)).leaf : ZERO_TEXT;
