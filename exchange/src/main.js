@@ -8,7 +8,9 @@ const PRIVATE_WALLET_ROUTE = '?wallet=burner';
 
 const params = new URLSearchParams(globalThis.location.search);
 const route = params.get('wallet');
-if (location.pathname === '/positions' || location.pathname === '/positions/') {
+if (/^\/shielded\/?$/.test(location.pathname)) {
+  import('./ui/shielded.js').then(({ mountShieldedPool }) => mountShieldedPool(root));
+} else if (location.pathname === '/positions' || location.pathname === '/positions/') {
   import('./ui/position-explorer.js').then(({ mountPositionExplorer }) => mountPositionExplorer(root, params));
 } else if (route === 'burner') {
   // Private wallet route: a built-in testnet burner unlocks a separate private

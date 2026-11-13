@@ -103,7 +103,8 @@ export function mountExchange(root, handlers = {}, options = {}) {
     h('div', { class: 'xc-top__ctx' },
       r.network,
       h('span', { class: 'xc-tag', title: `${COLLATERAL} is a mock token on a test network with no cash value.` }, h('strong', { text: COLLATERAL }), ' mock collateral'),
-      r.positionExplorer),
+      r.positionExplorer,
+      h('a', { class: 'xc-link', href: '/shielded', text: 'Shielded Pool' })),
     r.who);
 
   // ---------- market strip ----------
