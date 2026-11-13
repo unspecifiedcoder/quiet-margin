@@ -62,7 +62,8 @@ export class PoolClient {
     const { signer } = this.trader;
     this.privateAccount = toHex(fromBase58(signer.publicKey.slice(8)));
     const store = this.journalStore ?? new Store(indexedDbBackend('quiet-margin-pool-tx:' + this.pool + ':' + this.privateAccount));
-    this.chain = new Chain({ rpc: this.rpc, store, signer, accountId: this.privateAccount });
+    this.chain = new Chain({ rpc: this.rpc, store, signer, accountId: this.privateAccount,
+      broadcastWaitUntil: 'EXECUTED_OPTIMISTIC' });
     await this.exclusive(() => this.chain.resolveJournal());
     const state = await this.state();
     if (state.token !== this.token) throw new Error('This pool uses a different token.');
@@ -85,8 +86,11 @@ export class PoolClient {
 
   async gasReady() {
     try {
-      await this.rpc.viewAccessKey(this.privateAccount, this.trader.signer.publicKey);
-      return true;
+      const [key, account] = await Promise.all([
+        this.rpc.viewAccessKey(this.privateAccount, this.trader.signer.publicKey),
+        this.rpc.call('query', { request_type: 'view_account', account_id: this.privateAccount, finality: 'final' }),
+      ]);
+      return key.permission === 'FullAccess' && BigInt(account.amount) >= 5n * 10n ** 22n;
     } catch (error) {
       if (/UNKNOWN_ACCOUNT|UNKNOWN_ACCESS_KEY|does not exist/i.test(error.message)) return false;
       throw error;

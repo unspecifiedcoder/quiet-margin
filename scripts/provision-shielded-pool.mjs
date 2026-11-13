@@ -55,8 +55,10 @@ async function account(id) {
 if (process.argv.length > 2) {
   const [command, id] = process.argv.slice(2);
   assert(command === '--activate' && /^[a-f0-9]{64}$/.test(id), 'Use --activate with an implicit NEAR account.');
-  if (!await account(id)) {
-    const tx = await DEMO.batch(id).transfer(3n * 10n ** 22n).transact();
+  const funded = BigInt((await account(id))?.amount ?? 0);
+  const target = 15n * 10n ** 22n;
+  if (funded < target) {
+    const tx = await DEMO.batch(id).transfer(target - funded).transact();
     assert(tx.succeeded && tx.receiptFailures.length === 0, 'Testnet gas funding failed.');
     await waitFinal(chain, tx);
     console.log('Testnet gas funding:', tx.transactionReceipt.hash);
