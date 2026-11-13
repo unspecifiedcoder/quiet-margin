@@ -12,11 +12,15 @@ is offline.
 
 ## First look
 
-The default Shielded Pool can prove and sign the full trade in the browser.
-The browser-only testnet run covered two deposits, 30 mUSDC margin with 70 in
-shielded change, close, and withdrawal. [Browser-only receipts and setup](docs/SHIELDED-COLLATERAL.md#browser-only-build)
+Start in **Shielded Pool** for browser-proved BTC longs and shorts with
+isolated margin. The current testnet run deposited 60 and 40 mUSDC, opened a
+short with 30 mUSDC of margin and 70 mUSDC in shielded change, closed for a
+1 mUSDC gain, and withdrew 101 mUSDC. [Current setup and receipts](docs/SHIELDED-COLLATERAL.md#current-judge-pool-browser-only-longs-and-shorts).
+The BTC/USDT chart is live; a separate controlled NEAR mark settles the trade.
+[Watch the current short trade with wallet approvals and public explorers](docs/media/quiet-margin-shielded-short.mp4).
+For offline liquidation, use the original market replay below.
 
-[Watch the Shielded Pool testnet demo](docs/media/quiet-margin-shielded-pool.mp4).
+[Watch the earlier Shielded Pool testnet demo](docs/media/quiet-margin-shielded-pool.mp4).
 It shows two connected-wallet deposits, a 30 mUSDC private long with 70 mUSDC
 in shielded change, close, and withdrawal. The transaction and block explorer
 show what an observer can inspect. The recorded setup uses the local desktop
@@ -88,10 +92,7 @@ without an embedded ABI.
 
 ### Try it
 
-1. **Testnet consumer app.** The real app in [`exchange/`](exchange/). Its
-   funded coordinator runs locally and needs operator setup and keys, so the
-   video and the open link above stand in for it
-   ([`docs/EXCHANGE.md`](docs/EXCHANGE.md)).
+1. **Testnet consumer app.** Start with [Shielded Pool setup and receipts](docs/SHIELDED-COLLATERAL.md#current-judge-pool-browser-only-longs-and-shorts). The separate [original exchange](docs/EXCHANGE.md) uses a local funded coordinator.
 2. **Credential-free evidence.** Sections 1 and 2: a read-only replay and a
    strict receipt check. Node 22 on Windows or Linux, no install, no keys.
 3. **Reproducible source.** Section 3: one Linux command builds everything
