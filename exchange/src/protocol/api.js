@@ -251,6 +251,14 @@ export class Api {
     return session;
   }
 
+  async claimFaucet(publicKey, proof, { accountId, publicKey: walletKey, signature, expiresAt }) {
+    return parseSession(await this.request('POST', '/faucet/claim', {
+      public_key: publicKey,
+      proof,
+      wallet: { account_id: accountId, public_key: walletKey, signature, expires_at: expiresAt },
+    }, { auth: false, invite: true }));
+  }
+
   async approve({ nonce, commitment, quote_blinder, size_lots, entry_ticks }) {
     fromBase64(commitment, 32);
     fromBase64(quote_blinder, 32);

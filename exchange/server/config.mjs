@@ -73,6 +73,18 @@ export function loadConfig(env = process.env) {
   }
 
   const quotaRaw = env.XYTHUM_SESSION_QUOTA;
+  const walletFaucet = env.XYTHUM_WALLET_FAUCET === '1';
+  const walletOrigin = env.XYTHUM_WALLET_ORIGIN || null;
+  if (walletOrigin) {
+    let url;
+    try { url = new URL(walletOrigin); } catch {}
+    if (url?.origin !== walletOrigin || url.protocol !== 'https:') {
+      throw new ConfigError('XYTHUM_WALLET_ORIGIN must be a canonical HTTPS origin');
+    }
+  }
+  if (hosted && walletFaucet && !walletOrigin) {
+    throw new ConfigError('hosted wallet faucet requires XYTHUM_WALLET_ORIGIN');
+  }
   // Without an explicit quota the server runs read-only for sessions.
   const sessionQuota = quotaRaw === undefined || quotaRaw === ''
     ? 0 : integer(env, 'XYTHUM_SESSION_QUOTA', 0, 1, 50);
@@ -113,6 +125,8 @@ export function loadConfig(env = process.env) {
     marketWasmSha256: wasmPin,
     fingerprints,
     sessionQuota,
+    walletFaucet,
+    walletOrigin,
     setupQueue: integer(env, 'XYTHUM_SETUP_QUEUE', 4, 1, 16),
     traderNear: nearAmount(env, 'XYTHUM_TRADER_NEAR', NEAR / 2n, 2n * NEAR),
     marketNear: env.XYTHUM_MARKET_NEAR ? nearAmount(env, 'XYTHUM_MARKET_NEAR', 0n, 6n * NEAR) : null,

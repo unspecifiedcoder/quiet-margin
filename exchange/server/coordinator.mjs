@@ -8,6 +8,7 @@ import { makerApproval, positionContext } from '../../tests/actor.mjs';
 import { MAX_PRICE_TICKS, NEAR, RESERVE_CENTS } from './config.mjs';
 import { isHealthyRefusal } from './actors.mjs';
 import { HttpError, KeyedSerializer, safeMessage, sha256Hex } from './util.mjs';
+import { FAUCET_GRANT_CENTS, FAUCET_WINDOW_MS, faucetAuthorization, nep413Digest } from '../src/protocol/wallet-messages.js';
 
 export const NO_CODE = '11111111111111111111111111111111';
 const ONE_YOCTO = { attachedDeposit: 1n };
@@ -66,18 +67,20 @@ export function verifySessionProof(publicKey, proof) {
   if (typeof proof !== 'string' || !PROOF.test(proof)) throw invalid();
   const signature = Buffer.from(proof, 'base64');
   if (signature.length !== 64 || signature.toString('base64') !== proof) throw invalid();
-  let valid = false;
+  if (!verifyEd25519(publicKey, Buffer.from(SESSION_PROOF_PREFIX + publicKey, 'utf8'), signature)) throw invalid();
+  return signature;
+}
+
+function verifyEd25519(publicKey, message, signature) {
   try {
     const key = createPublicKey({
       key: Buffer.concat([ED25519_SPKI, Buffer.from(utils.PublicKey.fromString(publicKey).data)]),
       format: 'der', type: 'spki',
     });
-    valid = verify(null, Buffer.from(SESSION_PROOF_PREFIX + publicKey, 'utf8'), key, signature);
+    return verify(null, message, key, signature);
   } catch {
-    valid = false;
+    return false;
   }
-  if (!valid) throw invalid();
-  return signature;
 }
 
 // The bearer is derived from the proof, so the key holder re-derives the same
@@ -175,7 +178,33 @@ export class Coordinator {
   // Body: exactly {public_key, proof}, plus an optional strict-boolean
   // `restore_only`. With `restore_only: true` the request only recovers an
   // existing ready session for this key and proof (see #recoverSession).
-  async createSession(body, client = 'local') {
+  async claimFaucet(body, origin, client) {
+    exactKeys(body, ['public_key', 'proof', 'wallet']);
+    exactKeys(body.wallet, ['account_id', 'public_key', 'signature', 'expires_at']);
+    const traderKey = parsePublicKey(body.public_key);
+    verifySessionProof(traderKey, body.proof);
+    const { account_id: account, public_key: ownerKey, signature, expires_at: expiry } = body.wallet;
+    const invalid = () => new HttpError(401, 'invalid_wallet_proof', 'sign a fresh claim with your connected testnet wallet');
+    const accountPattern = /^(?=.{2,64}$)[a-z0-9]+(?:[._-][a-z0-9]+)*$/;
+    const now = this.now();
+    if (typeof account !== 'string' || !accountPattern.test(account) || this.forbidden.has(account)
+      || !Number.isSafeInteger(expiry) || expiry <= now || expiry > now + FAUCET_WINDOW_MS
+      || typeof signature !== 'string' || !PROOF.test(signature) || parsePublicKey(ownerKey) === traderKey) {
+      throw invalid();
+    }
+    const bytes = Buffer.from(signature, 'base64');
+    const digest = await nep413Digest(await faucetAuthorization(origin, account, traderKey, expiry));
+    if (bytes.toString('base64') !== signature || !verifyEd25519(ownerKey, digest, bytes)) throw invalid();
+    if (!await this.chain.accountState(account)) throw invalid();
+    const keys = await this.chain.accessKeys(account);
+    if (!keys.some((key) => key.public_key === ownerKey && key.permission === 'FullAccess')) throw invalid();
+
+    const claimId = sha256Hex('quiet-margin:testnet:faucet:v1:' + account);
+    return this.#serial.run('faucet:' + claimId, () =>
+      this.createSession({ public_key: traderKey, proof: body.proof }, client, claimId));
+  }
+
+  async createSession(body, client = 'local', claimId = null) {
     exactKeys(body, ['public_key', 'proof', 'restore_only']);
     if (!('public_key' in body) || !('proof' in body)) {
       throw new HttpError(400, 'invalid_body', 'expected exactly {public_key, proof} and optionally restore_only');
@@ -195,15 +224,23 @@ export class Coordinator {
     const mismatch = () => new HttpError(409, 'session_exists',
       'a session for this public key was created with a different proof');
     if (restoreOnly) return this.#recoverSession(publicKey, token, tokenHash, mismatch);
+    if (!claimId && this.config.walletFaucet) {
+      throw new HttpError(403, 'wallet_claim_required', 'connect a NEAR wallet to claim test collateral');
+    }
+    if (claimId && this.store.find((r) => r.wallet_claim_id === claimId && r.public_key !== publicKey)) {
+      throw new HttpError(409, 'wallet_already_funded', 'this wallet already claimed test collateral');
+    }
 
     const inflight = this.#inflight.get(publicKey);
     if (inflight) {
       if (inflight.tokenHash !== tokenHash) throw mismatch();
+      if (inflight.claimId !== claimId) throw mismatch();
       return inflight.promise;
     }
 
     const record = this.store.find((candidate) => candidate.public_key === publicKey);
     if (record?.token_hash && record.token_hash !== tokenHash) throw mismatch();
+    if (record && (record.wallet_claim_id ?? null) !== claimId) throw mismatch();
     if (record?.status === 'ready') {
       // A lost response is recoverable: the key holder re-derives the same
       // capability and gets the same session back, with no new transaction.
@@ -238,7 +275,7 @@ export class Coordinator {
       try {
         let current = record;
         if (!current) {
-          current = await this.#newRecord(publicKey, reserved, tokenHash);
+          current = await this.#newRecord(publicKey, reserved, tokenHash, claimId);
         } else if (!current.token_hash) {
           // A record from before proofs were required binds to the first valid proof.
           current.token_hash = tokenHash;
@@ -250,7 +287,7 @@ export class Coordinator {
         this.#inflight.delete(publicKey);
       }
     });
-    this.#inflight.set(publicKey, { promise, tokenHash });
+    this.#inflight.set(publicKey, { promise, tokenHash, claimId });
     start();
     return promise;
   }
@@ -290,7 +327,7 @@ export class Coordinator {
     return key;
   }
 
-  async #newRecord(publicKey, key, tokenHash) {
+  async #newRecord(publicKey, key, tokenHash, claimId) {
     const ids = sessionAccountIds(key, this.ids.root);
     this.#assertSessionAccount(ids.trader_id, 'trader');
     this.#assertSessionAccount(ids.market_id, 'market');
@@ -299,6 +336,7 @@ export class Coordinator {
     const record = {
       key, version: 1, status: 'provisioning', public_key: publicKey, token_hash: tokenHash,
       ...ids, deployment_id: this.random(32).toString('base64'),
+      ...(claimId && { wallet_claim_id: claimId }),
       created_at: new Date(this.now()).toISOString(),
       steps: {}, receipts: [], marks: 0, last_mark_at: 0,
       refreshes: 0, approvals: 0, keeper: null, last_error: null,
@@ -352,7 +390,7 @@ export class Coordinator {
       throw new HttpError(503, 'root_capacity', 'the demo root lacks testnet NEAR for another session');
     }
     let cents = 0;
-    if (!record.steps.trader_funds) cents += this.config.traderMusdc;
+    if (!record.steps.trader_funds) cents += this.#grantAmount(record);
     if (!record.steps.maker_vault) {
       const wallet = Number(await this.#view(this.ids.token, 'ft_balance_of', { account_id: this.ids.maker }));
       cents += Math.max(this.config.makerVaultMusdc - wallet, 0);
@@ -483,15 +521,28 @@ export class Coordinator {
     await this.#save(record);
   }
 
+  #grantAmount(record) {
+    return record.wallet_claim_id ? FAUCET_GRANT_CENTS : this.config.traderMusdc;
+  }
+
   async #ensureTraderFunds(record) {
     if (record.steps.trader_funds === 'done') return;
     await this.#serial.run('signer:DEMO', async () => {
       const wallet = Number(await this.#view(this.ids.token, 'ft_balance_of', { account_id: record.trader_id }));
       const ledger = await this.#view(record.market_id, 'get_ledger');
       const held = wallet + ledger.trader_available + ledger.trader_locked;
-      if (held < this.config.traderMusdc) {
+      const grant = this.#grantAmount(record);
+      if (held < grant) {
+        if (record.wallet_claim_id) {
+          if (record.steps.trader_funds === 'submitting') {
+            throw new HttpError(503, 'claim_pending_review', 'the prior transfer must be reconciled before funding can resume');
+          }
+          // A lost submission response must never authorize a second grant.
+          record.steps.trader_funds = 'submitting';
+          await this.#save(record);
+        }
         const tx = await this.#callHeld('DEMO', this.ids.token, 'ft_transfer',
-          { receiver_id: record.trader_id, amount: String(this.config.traderMusdc - held) }, ONE_YOCTO);
+          { receiver_id: record.trader_id, amount: String(grant - held) }, ONE_YOCTO);
         await this.#receipt(record, 'trader_musdc_transfer', tx);
       }
     });

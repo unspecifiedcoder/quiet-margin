@@ -112,6 +112,17 @@ export function createApp({ coordinator, config, log = () => {} }) {
     }
   };
   const routes = {
+    'POST /api/faucet/claim': async (req) => {
+      admit(req);
+      if (!config.walletFaucet) throw new HttpError(503, 'faucet_disabled', 'wallet funding is unavailable');
+      const origin = req.headers.origin;
+      const localOrigin = /^http:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::[1-9]\d{0,4})?$/.test(origin ?? '')
+        && origin.slice('http://'.length) === req.headers.host;
+      if (!origin || (config.walletOrigin ? origin !== config.walletOrigin : !localOrigin || config.hosted)) {
+        throw new HttpError(403, 'wallet_origin', 'faucet requests must come from the exchange origin');
+      }
+      return [201, await coordinator.claimFaucet(await readJson(req), origin, req.socket.remoteAddress)];
+    },
     // The invite gate runs before the body is read and before the coordinator
     // (proof check, quota, cooldown, provisioning) sees the request.
     'POST /api/sessions': async (req) => {
