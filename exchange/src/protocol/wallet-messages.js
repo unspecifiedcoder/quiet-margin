@@ -42,3 +42,13 @@ export function faucetAuthorization(origin, accountId, traderPublicKey, expiresA
     'One grant per testnet account. The operator verifies this signature.',
   ]);
 }
+
+export function poolFundingAuthorization(origin, accountId, traderPublicKey, expiresAt) {
+  return authorization(origin, 'quiet-margin:pool-funding:v1', [
+    'Claim 100 mUSDC and test NEAR for Quiet Margin',
+    'Account: ' + accountId,
+    'Trading key: ' + traderPublicKey,
+    'Expires: ' + new Date(expiresAt).toISOString(),
+    'The funding service verifies this signature and sees both account IDs.',
+  ]);
+}
