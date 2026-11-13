@@ -10,6 +10,8 @@ the trader is offline.
 
 Start with the [judge guide](JUDGES.md) for the demo video, public explorer links, and commands to verify the result.
 
+The [Shielded Pool](docs/SHIELDED-COLLATERAL.md) adds a shared testnet market at `/shielded`. The connected NEAR wallet deposits mock USDC, and a separate private trading key can spend part of that balance as margin.
+
 | Path | What it is | Needs |
 | --- | --- | --- |
 | [A. Testnet app](#a-testnet-app-real-browser-workflow) | The real consumer app signing real testnet transactions | A local funded coordinator, which needs **operator setup** (keys judges don't have) |
@@ -45,10 +47,9 @@ browser tab was closed. The final balances reconciled with zero bad debt.
 Transaction links are in
 [docs/EXCHANGE.md](docs/EXCHANGE.md#verified-local-testnet-run).
 
-Limits of that run: long-only mock assets on testnet, no hosted instance, and
-no mainnet. The maker, oracle, and both keepers shared one operator's keys,
-so it was not an independent-operator trial. Shorts, margin edits, multiple
-slots, and shielded notes are planned as separate later layers.
+Limits of that run include long-only mock assets and a local instance on
+testnet. The same operator ran the maker, oracle, and both keepers. The
+Shielded Pool is a separate market with its own limits and receipts.
 
 Original milestone tags and source revisions from the working repository.
 
