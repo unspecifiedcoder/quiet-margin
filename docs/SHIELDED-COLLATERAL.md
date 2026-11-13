@@ -4,6 +4,80 @@ Open **Shielded Pool** in Quiet Margin. Connect a NEAR testnet wallet, then sign
 the NEP-413 unlock message. The same wallet key and app origin derive the same
 private trading key. The signature stays in the browser.
 
+## Shielded pool with offline liquidation
+
+The new v3 Shielded Pool supports both sides. Two keepers each decrypt and
+acknowledge a copy of the same position opening before the contract accepts
+it. The on-chain signatures cover the pool domain, keeper index, commitment,
+position context, owner tag and ciphertext hash. Keepers learn the opening;
+they never get the private signing key or the secret that spends collateral.
+Either keeper can prove liquidation without the trader or the other keeper.
+New positions need both acknowledgment services available.
+
+The liquidation proof checks equity against 5% of mark notional and binds the
+result to the position, current mark and round. A positive balance becomes a
+shielded note that the trader can recover from their saved position opening.
+There is no keeper bounty in this test pool. Public maker credit can expose
+settlement P&L. The testnet controlled and live pools use the same contract and
+proof code. They have separate accounts so price shocks cannot affect the
+live-mark pool or the earlier browser demo.
+
+| Position | Healthy rejection | Keeper B liquidation | Shielded remainder |
+| --- | --- | --- | ---: |
+| Long | [Rejected](https://testnet.near.rocks/tx/9aCWuGXxcibYHPo2WsYoNsU7Hvp79GyDH342ZVvhFNSc) | [Accepted](https://testnet.near.rocks/tx/GPSkrasxWzjWBj4YErXzum6uxoqQQZyfEtvVeZCeMvYj) | 1.20 mUSDC |
+| Short | [Rejected](https://testnet.near.rocks/tx/7beZ9qf7RCjKiasEa3cg9h9XTomp5g23LbWd52JLwspw) | [Accepted](https://testnet.near.rocks/tx/2G4B7pZn6vziGe7AkLs7kLhJSWE8T9fFc11ZbsXUhYU1) | 2.80 mUSDC |
+
+To replay the deterministic test on a fresh controlled pool, run
+`node scripts/testnet-pool-liquidation.mjs open <evidence-dir>`, end the
+trader process, then run `node scripts/testnet-pool-liquidation.mjs cold <evidence-dir>`.
+The cold process reads only the Keeper B and test oracle keys in its isolated
+environment file. The test uses a 30 mUSDC deposit per position; the isolated
+deposits can make margin inferable by correlation. The public opening
+arguments still omit exact margin, size and direction. The tests also check
+an invalid keeper acknowledgment and reject liquidation replays.
+
+The live pool uses the public BTC/USDT feed from Binance, relayed by one
+authorized testnet publisher. NEAR checks the update time, rejects older or
+out-of-order updates, and blocks trading and liquidation when the mark is
+more than 90 seconds old. The publisher aims for a new round every 40 seconds.
+A proof must settle against the current round; if it changes before execution,
+retry against the new mark. This live publisher is trusted to report the
+source correctly. A production deployment should verify signed, multi-source
+oracle updates on-chain. The live testnet run used a $68,739.81 reference
+trade, rounded to $68,740: [mark](https://testnet.near.rocks/tx/5t1BAjGidto4Jpb5qPErLyLYAMtrxkhhhYJMU6c6QPp8),
+[private short open](https://testnet.near.rocks/tx/B4fdw8HYiehqmGga6FW7o8WppowSwnB77edCF1RFP2zu),
+[close into shielded balance](https://testnet.near.rocks/tx/3VjZ2q2bCdqLsz842LQpiRWPEHGd7UNwq32Mpk6Duad3).
+Verify both sets of receipts with `node scripts/verify-pool-liquidation.mjs`.
+
+Use `/shielded?pool=keeper` for the controlled pool and `/shielded?pool=live`
+for the live pool. The default route preserves the previous demo. A local
+judge server needs `QUIET_POOL_KEEPER_FILE` pointing to an ignored JSON file
+with `pools` (the two enabled account IDs) and `keepers` (two records
+containing base64 PKCS#8 `encryption` and `acknowledgment` private keys, in
+on-chain order). For this demo the acknowledgment service runs both keys in
+one process; use separate services in a deployment with independent operators.
+The operators use only testnet credentials:
+
+```text
+node scripts/shielded-pool-operator.mjs oracle <live-pool-account> <oracle.env> --watch
+node scripts/shielded-pool-operator.mjs keeper <pool-account> <keeper-b.env> B --watch
+```
+
+Build the `keeper-pool` contract into `target/keeper-pool`. Generate the
+liquidation key with `quiet-pool-prover setup-liquidation .testnet/shielded/keeper-v3-keys`,
+reusing the v2 spend and close keys. See the provisioning script for its
+expected ignored testnet credentials and journal.
+
+### Keeping funds private after settlement
+
+Closing, or receiving the remainder after liquidation, leaves the money in
+the shielded balance under the private wallet. It can be used for another
+trade. A withdrawal sends a standard NEP-141 token transfer. Its amount and
+destination are public even if the destination is another fresh NEAR account.
+A transfer to another *shielded wallet* would instead consume notes and create
+a new encrypted recipient note in the pool. That requires a dedicated proof
+and recipient discovery flow, which are not implemented.
+
 ## Current judge pool: browser-only longs and shorts
 
 The default `/shielded` route uses `judge-pool.qm-treasury-a280bef3.testnet`.

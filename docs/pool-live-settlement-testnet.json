@@ -1,0 +1,36 @@
+{
+  "pool": "live-pool.qm-treasury-a280bef3.testnet",
+  "positions": [
+    {
+      "short": true,
+      "deposit": {
+        "hash": "HtdMAkMtNV67ZgrmmgQnWmKnnPDZCqkiGkUyQtAZ5kGC",
+        "block": "BTXXz4DxMZUonKmfLQN59NHocLKruZRFbpW2sz9DfB7E",
+        "signer": "quiet-margin-demo-41d71371.testnet"
+      },
+      "commitment": "gAmtLBq5UlAmdFwx0RKIEk/B8O4U1lW1p2WEXWOpSnA=",
+      "open": {
+        "hash": "B4fdw8HYiehqmGga6FW7o8WppowSwnB77edCF1RFP2zu",
+        "block": "DfSMXHwz9cB65DXMJmFRpHNocckNaNecnepqoiwUbQZ8",
+        "signer": "ce5243775a2deca49e3df4455508640189d97ff1624dbac52e2c6778b2ca1cda"
+      },
+      "close": {
+        "hash": "3VjZ2q2bCdqLsz842LQpiRWPEHGd7UNwq32Mpk6Duad3",
+        "block": "7L41vUzuFCpvSRCbk2TLnzp5by37ZJqWmNrgpwKYp1FT",
+        "signer": "ce5243775a2deca49e3df4455508640189d97ff1624dbac52e2c6778b2ca1cda"
+      }
+    }
+  ],
+  "traderGas": {
+    "hash": "BhdjtALNUC4ga4KGuEQx24Yh4swXMi3MtKqoAGeVmspP",
+    "block": "Ee3cXE4jH76FLNySYB7LqhgmfYp4QgPPftwvmGyYuwYF",
+    "signer": "quiet-margin-demo-41d71371.testnet"
+  },
+  "liveMark": {
+    "transaction": "5t1BAjGidto4Jpb5qPErLyLYAMtrxkhhhYJMU6c6QPp8",
+    "sourcePrice": "68739.81000000",
+    "price_ticks": 6874,
+    "observed_at": 1794583334
+  },
+  "oracle": "oracle.qm-treasury-a280bef3.testnet"
+}

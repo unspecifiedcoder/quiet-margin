@@ -13,10 +13,12 @@ const wallet = parseEnv(readFileSync(file('.testnet/quiet-margin-wallet-recordin
 assert.equal(env.NEAR_NETWORK_ID, 'testnet');
 assert.equal(env.NEAR_RPC_URL, TESTNET_RPC);
 const args = process.argv.slice(2);
-const judgePool = args[0] === '--judge-pool';
+const keeperPool = args[0] === '--keeper-pool' || args[0] === '--keeper-pool-live';
+const liveOracle = args[0] === '--keeper-pool-live';
+const judgePool = keeperPool || args[0] === '--judge-pool';
 const browserPool = judgePool || args[0] === '--browser-pool';
 if (browserPool) args.shift();
-const pool = (judgePool ? 'judge-pool.' : browserPool ? 'browser-pool.' : 'shielded.') + env.NEAR_DEMO_ACCOUNT_ID;
+const pool = (keeperPool ? (liveOracle ? 'live-pool.' : 'keeper-pool.') : judgePool ? 'judge-pool.' : browserPool ? 'browser-pool.' : 'shielded.') + env.NEAR_DEMO_ACCOUNT_ID;
 const keyDir = judgePool ? 'judge-side-keys' : browserPool ? 'browser-keys' : 'keys';
 const token = env.NEAR_TOKEN_ACCOUNT_ID;
 const oracle = env.NEAR_ORACLE_ACCOUNT_ID;
@@ -25,7 +27,13 @@ const keys = Object.fromEntries(['spend', 'close'].map((kind) => {
   const vk = readFileSync(file('.testnet/shielded/' + keyDir + '/' + kind + '.vk'));
   return [kind, { bytes: vk.toString('base64'), fingerprint: createHash('sha256').update(vk).digest('base64') }];
 }));
-const wasm = readFileSync(file('target/' + (browserPool ? 'browser-pool' : 'pool-build') + '/wasm32-unknown-unknown/release/xythum_near_perps.wasm'));
+const liquidation = keeperPool ? readFileSync(file('.testnet/shielded/keeper-v3-keys/liquidation.vk')) : null;
+const keepers = keeperPool ? ['KEEPER_A', 'KEEPER_B'].map((role) => ({
+  account: env['NEAR_' + role + '_ACCOUNT_ID'],
+  encryption_key: env['NEAR_' + role + '_ENCRYPTION_PUBLIC'],
+  acknowledgment_key: env['NEAR_' + role + '_ACK_PUBLIC'],
+})) : null;
+const wasm = readFileSync(file('target/' + (keeperPool ? 'keeper-pool' : browserPool ? 'browser-pool' : 'pool-build') + '/wasm32-unknown-unknown/release/xythum_near_perps.wasm'));
 const chain = await connectChain(TESTNET_RPC, true);
 const marketKey = KeyPair.fromString(env.NEAR_MARKET_SECRET_KEY);
 const { DEMO, POOL, ORACLE } = await demoAccounts(chain, {
@@ -35,7 +43,7 @@ const { DEMO, POOL, ORACLE } = await demoAccounts(chain, {
 });
 const view = (id, method, args) => viewFinal(chain, id, method, args);
 const record = { pool, token, oracle, wallet, keyFingerprints: { spend: keys.spend.fingerprint, close: keys.close.fingerprint } };
-const journal = file('.testnet/shielded/' + (judgePool ? 'judge-deployment.json' : browserPool ? 'browser-deployment.json' : 'deployment.json'));
+const journal = file('.testnet/shielded/' + (keeperPool ? (liveOracle ? 'live-deployment.json' : 'keeper-deployment.json') : judgePool ? 'judge-deployment.json' : browserPool ? 'browser-deployment.json' : 'deployment.json'));
 try { Object.assign(record, JSON.parse(readFileSync(journal, 'utf8'))); }
 catch (error) { if (error.code !== 'ENOENT') throw error; }
 assert.equal(record.pool, pool);
@@ -73,14 +81,15 @@ if (args.length > 0) {
 }
 let state = await account(pool);
 if (!state) {
-  const funds = BigInt(wasm.length + 20_000) * 10n ** 19n + 3n * 10n ** 23n;
-  assert(BigInt((await account(maker)).amount) > funds + 5n * 10n ** 23n, 'Treasury needs more test NEAR.');
+  const funds = BigInt(wasm.length + 20_000) * 10n ** 19n + (keeperPool ? 10n : 30n) * 10n ** 22n;
+  assert(BigInt((await account(maker)).amount) > funds + (keeperPool ? 15n : 50n) * 10n ** 22n, 'Treasury needs more test NEAR.');
   await track('create', DEMO.batch(pool).createAccount().transfer(funds).addKey(marketKey.getPublicKey()).transact());
   state = await account(pool);
 }
 if (/^1+$/.test(state.code_hash)) {
   await track('deploy', POOL.batch(POOL).deployContract(wasm).functionCall('init', {
     token, maker, oracle, spend_vk: keys.spend.bytes, close_vk: keys.close.bytes,
+    ...(keeperPool ? { liquidation_vk: liquidation.toString("base64"), keepers, live_oracle: liveOracle } : {}),
   }, { gas }).deleteKey(marketKey.getPublicKey()).transact());
 }
 const call = (signer, target, method, args, deposit = 0n) =>
@@ -96,21 +105,22 @@ for (const [name, id] of [['pool', pool], ['wallet', wallet]]) {
     }, 10n ** 22n));
   }
 }
-const makerReserve = judgePool ? 360_000 : 60_000;
+const makerReserve = keeperPool ? (liveOracle ? 60_000 : 120_000) : judgePool ? 360_000 : 60_000;
 if (Number(poolView.maker_available) < makerReserve) {
   await track('maker_reserve', call(DEMO, token, 'ft_transfer_call', {
     receiver_id: pool, amount: String(makerReserve - Number(poolView.maker_available)), msg: 'maker',
   }, 1n));
 }
-if (!poolView.round) await track('mark', call(ORACLE, pool, 'publish_mark', { price_ticks: 6880 }));
+if (!poolView.round && !liveOracle) await track('mark', call(ORACLE, pool, 'publish_mark', { price_ticks: 6880 }));
 if (!record.wallet_funding && Number(await view(token, 'ft_balance_of', { account_id: wallet })) < 10_000) {
   await track('wallet_funding', call(DEMO, token, 'ft_transfer', { receiver_id: wallet, amount: '10000' }, 1n));
 }
 const data = { pool, token, spendVk: keys.spend.fingerprint, closeVk: keys.close.fingerprint };
-if (browserPool) data.proofVersion = judgePool ? 'poseidon-v2' : 'poseidon-v1';
+if (browserPool) data.proofVersion = keeperPool ? 'poseidon-v3' : judgePool ? 'poseidon-v2' : 'poseidon-v1';
+if (keeperPool) data.liveOracle = liveOracle;
 mkdirSync(file('exchange/public/shielded/'), { recursive: true });
 // Browser artifacts for a new deployment must be published together. Keep its
 // generated config beside its keys until the operator stages the static bundle.
-const configPath = browserPool ? '.testnet/shielded/' + keyDir + '/config.json' : 'exchange/public/shielded/config.json';
+const configPath = keeperPool ? '.testnet/shielded/' + (liveOracle ? 'live-config.json' : 'keeper-config.json') : browserPool ? '.testnet/shielded/' + keyDir + '/config.json' : 'exchange/public/shielded/config.json';
 writeFileSync(file(configPath), JSON.stringify(data, null, 2) + '\n');
 console.log(JSON.stringify(record, null, 2));

@@ -1,0 +1,96 @@
+{
+  "pool": "keeper-pool.qm-treasury-a280bef3.testnet",
+  "positions": [
+    {
+      "short": false,
+      "deposit": {
+        "hash": "GkL7yUZAULDc7Qm4VymMjsYa6jQAoUda6e4TpVfF5UUK",
+        "block": "7ucbCU4Q4DkCPGv8Bbzg5gpir7s43M4mCB1MoE5EsX9t",
+        "signer": "quiet-margin-demo-41d71371.testnet"
+      },
+      "commitment": "cxblb8o4BtOp6uqPBLpLXn4u5ejvVhutsAwvoaSFIVI=",
+      "open": {
+        "hash": "EpTDGg2Mwite37HZNpZ14xLeNehfsowDkKYg4W5hTJyt",
+        "block": "BP6MhT1F5eAUKpnwKKVmw7KJSrbcQ9Ryrv594Qz2FXxX",
+        "signer": "quiet-margin-demo-41d71371.testnet"
+      },
+      "healthyMark": {
+        "hash": "F3GREHbh78G3hurfphMTvvJtrs5oa4ambhkGiZusukyw",
+        "block": "Crmd81Nke1JrUK3CV8JBW9a2G4NMV63759y3JccfiSLK",
+        "signer": "oracle.qm-treasury-a280bef3.testnet"
+      },
+      "healthyRejected": {
+        "hash": "9aCWuGXxcibYHPo2WsYoNsU7Hvp79GyDH342ZVvhFNSc",
+        "block": "3JN95PmkQcyKLV5vvshgH6DYqcJFPYU2UsAMYUm59hNH",
+        "signer": "keeper-b.qm-treasury-a280bef3.testnet"
+      },
+      "triggerMark": {
+        "hash": "Ej6UUBh5edoaaw7V2fmSGD4jUxMkmrPqRqcji7MsUM2V",
+        "block": "DxPKEDCoxrr6ib45htvJfsXm9gDFTBDYMP1mXcZzRogm",
+        "signer": "oracle.qm-treasury-a280bef3.testnet"
+      },
+      "liquidation": {
+        "hash": "GPSkrasxWzjWBj4YErXzum6uxoqQQZyfEtvVeZCeMvYj",
+        "block": "7T8cVjoFMKfvSzmqeajtJ9WNcCKTVbdTxEYVDJCGFD92",
+        "signer": "keeper-b.qm-treasury-a280bef3.testnet"
+      },
+      "shieldedEquityCents": 120,
+      "replayRejected": {
+        "hash": "DYmf7PJvjRj3KVm9ixABmCadgaJuDhr3vtKnaCcDfnBY",
+        "block": "7svw3W8673odPk1VNz8npkgcf1v83itKtck4emamoJLH",
+        "signer": "keeper-b.qm-treasury-a280bef3.testnet"
+      }
+    },
+    {
+      "short": true,
+      "deposit": {
+        "hash": "E9uaXwT4UqPmFxb3KXAyjqccg23LttEESerynEqmKPSj",
+        "block": "8eeUYcHcjGp285Tib6TL65XxHHGg8inJk9UkfzNuUC4X",
+        "signer": "quiet-margin-demo-41d71371.testnet"
+      },
+      "commitment": "KmXcJPAAACFn3UJA7wvySQVOGVw6JHSY/Oroh03q9UA=",
+      "open": {
+        "hash": "AcAmSKniMVsi2Wt7ZBVk1jJSypSfiH646ndJTgn6fPir",
+        "block": "8XaNqSxyVXB5LqDDKZw2BqFgnwHNdm468kSAAJHsLb4h",
+        "signer": "quiet-margin-demo-41d71371.testnet"
+      },
+      "healthyMark": {
+        "hash": "FqSUMqE362gWW7Pdtw26kJEb6xvqNT3qKFJjhmXwibL2",
+        "block": "EhbFe3bQbZEayVkN9LqJ9SHJMx1n29b7AMp2uyQ95DkS",
+        "signer": "oracle.qm-treasury-a280bef3.testnet"
+      },
+      "healthyRejected": {
+        "hash": "7beZ9qf7RCjKiasEa3cg9h9XTomp5g23LbWd52JLwspw",
+        "block": "DGTDgqvNEDcihaSM7565wfWqtu3ARC1jc7Cs75xhhP6N",
+        "signer": "keeper-b.qm-treasury-a280bef3.testnet"
+      },
+      "triggerMark": {
+        "hash": "BJvYVVHuYwJDMkL3tLYQZfLZBJ5qZnHT1vsDsg2P7h51",
+        "block": "EYrBjZrTpp81k53ynX4G7oFCF6DtTUMWu3Nu9xJ2cdAa",
+        "signer": "oracle.qm-treasury-a280bef3.testnet"
+      },
+      "liquidation": {
+        "hash": "2G4B7pZn6vziGe7AkLs7kLhJSWE8T9fFc11ZbsXUhYU1",
+        "block": "DXnXHZjgbiWf3fu34baKKvxydQVFrr8rHAt1LXkaPBne",
+        "signer": "keeper-b.qm-treasury-a280bef3.testnet"
+      },
+      "shieldedEquityCents": 280,
+      "replayRejected": {
+        "hash": "2DbvV5nRtYSM4Z2NuVtuebRK4P1C51iejuFUDGWCGtZH",
+        "block": "HA8k3uFsaFvt9aSix8d7feLCSs36bwWKY2f9fe3KQqDk",
+        "signer": "keeper-b.qm-treasury-a280bef3.testnet"
+      }
+    }
+  ],
+  "initialMark": {
+    "hash": "26UZcar4RMzJ3JcK8hHswTpJzU3apFb1KxKPCCHPom4S",
+    "block": "31QQ2jQQuwGzccpA2rreqJvfn1s2qHSTNmtVKcV227dP",
+    "signer": "oracle.qm-treasury-a280bef3.testnet"
+  },
+  "badAck": {
+    "hash": "FDzTmmp5U7QTJBBKKEMjiPvu1S25iMjqgq6pNomLDp39",
+    "block": "GY1JUHzaC8U9pZtGx4tQ7B5Dz6gK6XzaKrcFaN5zHnuJ",
+    "signer": "quiet-margin-demo-41d71371.testnet"
+  },
+  "keeper": "keeper-b.qm-treasury-a280bef3.testnet"
+}

@@ -18,7 +18,7 @@ short with 30 mUSDC of margin and 70 mUSDC in shielded change, closed for a
 1 mUSDC gain, and withdrew 101 mUSDC. [Current setup and receipts](docs/SHIELDED-COLLATERAL.md#current-judge-pool-browser-only-longs-and-shorts).
 The BTC/USDT chart is live; a separate controlled NEAR mark settles the trade.
 [Watch the current short trade with wallet approvals and public explorers](docs/media/quiet-margin-shielded-short.mp4).
-For offline liquidation, use the original market replay below.
+The newer [shielded keeper pool](docs/SHIELDED-COLLATERAL.md#shielded-pool-with-offline-liquidation) has testnet evidence for backup keeper liquidations on both sides, plus a separate live-mark deployment.
 
 [Watch the earlier Shielded Pool testnet demo](docs/media/quiet-margin-shielded-pool.mp4).
 It shows two connected-wallet deposits, a 30 mUSDC private long with 70 mUSDC
