@@ -28,33 +28,37 @@ export function spkiToRaw(spki) {
 
 export const rawToSpki = (raw) => concat(X25519_SPKI_PREFIX, raw);
 
-async function aeadKey(shared, commitmentBytes, usage) {
+async function aeadKey(shared, commitmentBytes, usage, info = ENVELOPE_INFO) {
   if (shared.every((b) => b === 0)) throw new Error('X25519 produced a small-order shared secret');
   const ikm = await subtle().importKey('raw', shared, 'HKDF', false, ['deriveKey']);
   return subtle().deriveKey(
-    { name: 'HKDF', hash: 'SHA-256', salt: commitmentBytes, info: ENVELOPE_INFO },
+    { name: 'HKDF', hash: 'SHA-256', salt: commitmentBytes, info },
     ikm, { name: 'AES-GCM', length: 256 }, false, [usage],
   );
 }
 
 /** Encrypts the witness for one keeper. `recipient` is Base64 SPKI. */
 export async function encryptWitness(witness, recipient, commitmentB64) {
+  return encryptEnvelope(encodeWitness(witness), recipient, commitmentB64, ENVELOPE_INFO);
+}
+
+export async function encryptEnvelope(plain, recipient, commitmentB64, info) {
   const commitmentBytes = fromBase64(commitmentB64, 32);
   const recipientRaw = spkiToRaw(fromBase64(recipient));
   const ephemeral = x25519.utils.randomSecretKey();
   try {
     const shared = x25519.getSharedSecret(ephemeral, recipientRaw);
-    const key = await aeadKey(shared, commitmentBytes, 'encrypt');
+    const key = await aeadKey(shared, commitmentBytes, 'encrypt', info);
     const iv = randomBytes(12);
     const sealed = new Uint8Array(await subtle().encrypt(
       { name: 'AES-GCM', iv, additionalData: commitmentBytes, tagLength: 128 },
-      key, encodeWitness(witness),
+      key, plain,
     ));
     // WebCrypto returns body || tag; the actor layout is tag || body.
     const body = sealed.subarray(0, sealed.length - 16);
     const tag = sealed.subarray(sealed.length - 16);
     const out = concat(rawToSpki(x25519.getPublicKey(ephemeral)), iv, tag, body);
-    if (out.length !== CIPHERTEXT_LEN) throw new Error('envelope length mismatch');
+    if (out.length !== 72 + plain.length) throw new Error('envelope length mismatch');
     return toBase64(out);
   } finally {
     ephemeral.fill(0);
@@ -63,17 +67,21 @@ export async function encryptWitness(witness, recipient, commitmentB64) {
 
 /** Inverse of `encryptWitness`, given the keeper's raw X25519 secret. Test use. */
 export async function decryptWitness(ciphertextB64, secretRaw, commitmentB64) {
+  return decodeWitness(await decryptEnvelope(ciphertextB64, secretRaw, commitmentB64, ENVELOPE_INFO, CIPHERTEXT_LEN));
+}
+
+export async function decryptEnvelope(ciphertextB64, secretRaw, commitmentB64, info, envelopeLength) {
   const input = fromBase64(ciphertextB64);
-  if (input.length !== CIPHERTEXT_LEN) throw new Error('undecryptable keeper payload');
+  if (input.length !== envelopeLength) throw new Error('undecryptable keeper payload');
   const commitmentBytes = fromBase64(commitmentB64, 32);
   try {
     const shared = x25519.getSharedSecret(secretRaw, spkiToRaw(input.subarray(0, 44)));
-    const key = await aeadKey(shared, commitmentBytes, 'decrypt');
+    const key = await aeadKey(shared, commitmentBytes, 'decrypt', info);
     const plain = await subtle().decrypt(
       { name: 'AES-GCM', iv: input.subarray(44, 56), additionalData: commitmentBytes, tagLength: 128 },
       key, concat(input.subarray(72), input.subarray(56, 72)),
     );
-    return decodeWitness(new Uint8Array(plain));
+    return new Uint8Array(plain);
   } catch {
     throw new Error('undecryptable keeper payload');
   }

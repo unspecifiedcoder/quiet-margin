@@ -1,3 +1,4 @@
+import { sealPoolOpening } from './pool-keeper.js';
 import { concat, fromBase58, fromBase64, fromUtf8, randomBytes, sha256, subtle, toBase64, toHex, utf8 } from './bytes.js';
 import { Chain } from './chain.js';
 import { failureReason, interpretOutcome, Rpc, TESTNET_RPC } from './rpc.js';
@@ -77,9 +78,9 @@ function verifyWalletTransaction(result) {
 }
 
 export class PoolClient {
-  constructor({ account, wallet, trader, pool, token, journalStore, prove, hashes, rpc = new Rpc(TESTNET_RPC) }) {
+  constructor({ account, wallet, trader, pool, token, journalStore, prove, hashes, keeperAck, rpc = new Rpc(TESTNET_RPC) }) {
     if (![account, pool, token].every(isAccountId)) throw new Error('Invalid pool configuration.');
-    Object.assign(this, { account, wallet, trader, pool, token, journalStore, prove, hashes, rpc });
+    Object.assign(this, { account, wallet, trader, pool, token, journalStore, prove, hashes, keeperAck, rpc });
     this.key = 'pool-notes:' + pool;
   }
 
@@ -92,8 +93,10 @@ export class PoolClient {
     await this.exclusive(() => this.chain.resolveJournal());
     const state = await this.state();
     if (state.token !== this.token) throw new Error('This pool uses a different token.');
-    if (['poseidon-v1', 'poseidon-v2'].includes(state.proof_version) !== Boolean(this.hashes)) throw new Error('The pool proof version differs from this deployment.');
-    this.depth = state.proof_version === 'poseidon-v2' ? 6 : DEPTH;
+    if (['poseidon-v1', 'poseidon-v2', 'poseidon-v3'].includes(state.proof_version) !== Boolean(this.hashes)) throw new Error('The pool proof version differs from this deployment.');
+    this.keeperConfig = state.proof_version === 'poseidon-v3'
+      ? await this.rpc.view(this.pool, 'get_keeper_config') : null;
+    this.depth = ['poseidon-v2', 'poseidon-v3'].includes(state.proof_version) ? 6 : DEPTH;
     this.domain = bytes(state.domain);
     this.owner = await sha256(await signer.sign(concat(utf8('Quiet Margin private collateral v2:'), this.domain)));
     return this.read();
@@ -156,12 +159,23 @@ export class PoolClient {
   }
 
   async read() {
-    const [state, records, wallet] = await Promise.all([
+    const [state, records, wallet, oracle] = await Promise.all([
       this.state(), this.records(), this.rpc.view(this.token, 'ft_balance_of', { account_id: this.account }),
+      this.keeperConfig?.live_oracle ? this.rpc.view(this.pool, 'get_keeper_config') : null,
     ]);
-    const owned = await Promise.all(records.notes.map(async (note) => ({ note, ...await this.noteFields(note) })));
+    const active = new Set(state.positions);
+    const liquidations = this.keeperConfig ? await Promise.all(records.positions
+      .filter((position) => !active.has(position.commitment)).map(async (position) => {
+        const credit = await this.rpc.view(this.pool, 'get_liquidation_credit', { commitment: position.commitment });
+        if (credit == null) return null;
+        const cents = 60_000 + position.margin - Number(credit);
+        return { commitment: position.commitment, cents, salt: position.blinder };
+      })) : [];
+    const recovered = liquidations.filter((row) => row?.cents > 0).map(({ cents, salt }) => ({ cents, salt }));
+    const notes = new Map([...records.notes, ...recovered].map((n) => [n.salt.join(','), n]));
+    const owned = await Promise.all([...notes.values()].map(async (note) => ({ note, ...await this.noteFields(note) })));
     const live = owned.filter((n) => state.leaves.includes(n.leaf) && !state.spent.includes(n.nullifier));
-    return { state, records, live, wallet: Number(wallet),
+    return { state, records, live, oracle, liquidations: liquidations.filter(Boolean), wallet: Number(wallet),
       balance: live.reduce((sum, { note }) => sum + note.cents, 0),
       position: records.positions.find((p) => state.positions.includes(p.commitment)),
     };
@@ -234,7 +248,16 @@ export class PoolClient {
     const proof = await this.prove('spend', view.state.spend_vk_sha256, {
       ...witness, context: position.context, blinder: position.blinder, lots, entry, margin, short, withdraw: 0, recipient: list(ZERO),
     });
-    return this.call('open_private', { ...args, commitment, context: toBase64(context), owner_tag: tag, entry_ticks: entry, proof });
+    const call = { ...args, commitment, context: toBase64(context), owner_tag: tag, entry_ticks: entry, proof };
+    if (this.keeperConfig) {
+      if (!this.keeperAck) throw new Error('Keeper acknowledgment service is unavailable.');
+      call.envelopes = await Promise.all(this.keeperConfig.keepers.map(({ encryption_key }) =>
+        sealPoolOpening(position, encryption_key)));
+      call.acknowledgments = await Promise.all(call.envelopes.map((envelope, index) => this.keeperAck(index, {
+        commitment, context: call.context, owner_tag: tag, envelope,
+      })));
+    }
+    return this.call('open_private', call);
   }
 
   async close() {
