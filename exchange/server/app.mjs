@@ -108,7 +108,7 @@ export function checkInvite(header, invite) {
   return given.length === invite.length && timingSafeEqual(given, invite);
 }
 
-export function createApp({ coordinator, config, poolProver, log = () => {} }) {
+export function createApp({ coordinator, config, poolProver, poolFunding, log = () => {} }) {
   const distRoot = resolve(config.distDir);
   const admit = (req) => {
     if (!config.hosted) return;
@@ -120,6 +120,13 @@ export function createApp({ coordinator, config, poolProver, log = () => {} }) {
     }
   };
   const routes = {
+    'POST /api/pool/funding': async (req) => {
+      if (!poolFunding) throw new HttpError(404, 'not_found', 'Test funding is unavailable on this host.');
+      if (req.headers.origin !== config.poolFundingOrigin || req.headers['sec-fetch-site'] !== 'same-origin') {
+        throw new HttpError(403, 'wallet_origin', 'Submit the funding request from the exchange.');
+      }
+      return [200, await poolFunding(await readJson(req))];
+    },
     'POST /api/proving/local-pool': async (req) => {
       if (!poolProver || config.hosted) throw new HttpError(404, 'not_found', 'local proof helper is unavailable');
       const origin = req.headers.origin;
@@ -175,6 +182,7 @@ export function createApp({ coordinator, config, poolProver, log = () => {} }) {
       ok: true, chain_id: 'testnet', sessions: coordinator.store.size, session_quota: config.sessionQuota,
       ...(config.walletFaucet && !config.hosted && { connected_wallet: true }),
       ...(poolProver && !config.hosted && { local_pool_prover: true }),
+      ...(poolFunding && { pool_funding: true }),
     }],
   };
 
@@ -190,7 +198,7 @@ export function createApp({ coordinator, config, poolProver, log = () => {} }) {
     if (decoded.includes('\0') || decoded.split(/[\\/]/).some((segment) => segment.startsWith('.'))) return false;
     const target = resolve(join(distRoot, decoded));
     if (target !== distRoot && !target.startsWith(distRoot + sep)) return false;
-    if (/^\/shielded\/browser-pool\/(spend|close)\.pk$/.test(decoded)) {
+    if (/^\/shielded\/(browser|judge)-pool\/(spend|close)\.pk$/.test(decoded)) {
       return sendFile(res, target, 'application/octet-stream', 'no-cache');
     }
     const type = STATIC_TYPES[extname(target).toLowerCase()];
