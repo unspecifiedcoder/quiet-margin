@@ -13,6 +13,7 @@ crate-type = ["cdylib", "rlib"]
 [features]
 # Builds the sandbox mock NEP-141 token instead of the clearing contract.
 mock-token = ["dep:near-contract-standards"]
+shielded-pool = []
 
 [dependencies]
 near-sdk = "=5.30.1"

@@ -11,10 +11,13 @@ pub mod mock_token;
 #[cfg(not(feature = "mock-token"))]
 mod verifier;
 
-#[cfg(not(feature = "mock-token"))]
+#[cfg(all(feature = "shielded-pool", not(feature = "mock-token")))]
+pub mod shielded_pool;
+
+#[cfg(not(any(feature = "mock-token", feature = "shielded-pool")))]
 pub use clearing::*;
 
-#[cfg(not(feature = "mock-token"))]
+#[cfg(not(any(feature = "mock-token", feature = "shielded-pool")))]
 mod clearing {
     use crate::verifier::{self, liquidation_inputs, open_inputs};
     use near_sdk::json_types::{Base64VecU8, U128};
