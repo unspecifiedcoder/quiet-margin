@@ -17,3 +17,4 @@ pub mod cli;
 pub mod collateral;
 pub mod encoding;
 pub mod model;
+pub mod pool;

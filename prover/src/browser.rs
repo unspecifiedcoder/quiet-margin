@@ -283,14 +283,26 @@ pub fn load_checked_key<S: KeySource + ?Sized>(
     statement: Statement,
     expected_vk_sha256_b64: &str,
 ) -> Result<ProvingKey<Bls12_381>, String> {
+    load_key_for_inputs(
+        src,
+        statement.public_inputs(),
+        statement.name(),
+        expected_vk_sha256_b64,
+    )
+}
+
+pub(crate) fn load_key_for_inputs<S: KeySource + ?Sized>(
+    src: &S,
+    count: usize,
+    name: &str,
+    expected_vk_sha256_b64: &str,
+) -> Result<ProvingKey<Bls12_381>, String> {
     let expected = decode32("expected_vk_sha256_b64", expected_vk_sha256_b64)?;
     let layout = key_layout(src)?;
-    if layout.public_inputs != statement.public_inputs() {
+    if layout.public_inputs != count {
         return Err(format!(
             "proving key has {} public inputs; the {} statement has {}",
-            layout.public_inputs,
-            statement.name(),
-            statement.public_inputs()
+            layout.public_inputs, name, count
         ));
     }
     let (vk, digest) = read_vk(src, &layout)?;
@@ -298,7 +310,7 @@ pub fn load_checked_key<S: KeySource + ?Sized>(
         return Err(format!(
             "proving key's verifying key SHA-256 is {}, not the expected {} fingerprint",
             b64(&digest),
-            statement.name()
+            name
         ));
     }
     let pk = ProvingKey::<Bls12_381>::deserialize_with_mode(
@@ -306,7 +318,7 @@ pub fn load_checked_key<S: KeySource + ?Sized>(
         layout.format.compress(),
         Validate::No,
     )
-    .map_err(|e| format!("cannot decode the {} proving key: {e}", statement.name()))?;
+    .map_err(|e| format!("cannot decode the {name} proving key: {e}"))?;
     if pk.vk != vk {
         return Err("proving key changed while it was decoded".into());
     }
@@ -606,5 +618,20 @@ mod wasm {
         #[wasm_bindgen(unchecked_param_type = "Uint8Array")] pk_bytes: &JsValue,
     ) -> Result<String, JsError> {
         js(super::key_info_json(&bytes(pk_bytes)?))
+    }
+
+    #[wasm_bindgen]
+    pub fn prove_pool(
+        kind: &str,
+        pk_bytes: &JsValue,
+        fingerprint: &str,
+        input: &str,
+    ) -> Result<String, JsError> {
+        js(crate::pool::prove_json(
+            kind,
+            &bytes(pk_bytes)?,
+            fingerprint,
+            input,
+        ))
     }
 }

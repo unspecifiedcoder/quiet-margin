@@ -20,6 +20,10 @@ path = "src/main.rs"
 name = "xythum-browser-keys"
 path = "browser/keys.rs"
 
+[[bin]]
+name = "quiet-pool-prover"
+path = "src/bin/quiet-pool-prover.rs"
+
 [dependencies]
 ark-bls12-381 = { version = "=0.5.0", default-features = false, features = ["curve"] }
 ark-crypto-primitives = { version = "=0.5.0", default-features = false, features = ["crh", "r1cs", "std"] }

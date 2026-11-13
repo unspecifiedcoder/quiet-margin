@@ -230,7 +230,7 @@ fn fr_from_i128(v: i128) -> Fr {
 }
 
 /// Enforces `0 <= v < 2^bits` (as an integer) by boolean decomposition.
-fn enforce_bits(
+pub(crate) fn enforce_bits(
     cs: &ConstraintSystemRef<Fr>,
     v: &FpVar<Fr>,
     bits: usize,
@@ -261,7 +261,10 @@ fn enforce_max_zero(
 }
 
 /// Allocates `max(x, 0)` as a witness and constrains it.
-fn max_zero(cs: &ConstraintSystemRef<Fr>, x: &FpVar<Fr>) -> Result<FpVar<Fr>, SynthesisError> {
+pub(crate) fn max_zero(
+    cs: &ConstraintSystemRef<Fr>,
+    x: &FpVar<Fr>,
+) -> Result<FpVar<Fr>, SynthesisError> {
     let z = FpVar::new_witness(cs.clone(), || {
         Ok(fr_from_i128(signed_value(x.value()?).max(0)))
     })?;
@@ -288,10 +291,10 @@ fn enforce_range(
     enforce_bits(cs, &(constant(cs, hi) - v), bits)
 }
 
-struct PositionVars {
-    lots: FpVar<Fr>,
-    entry: FpVar<Fr>,
-    margin: FpVar<Fr>,
+pub(crate) struct PositionVars {
+    pub(crate) lots: FpVar<Fr>,
+    pub(crate) entry: FpVar<Fr>,
+    pub(crate) margin: FpVar<Fr>,
     /// The byte witnesses hashed into the commitment, reused by the quote.
     ctx_b: Vec<UInt8<Fr>>,
     lots_b: Vec<UInt8<Fr>>,
@@ -309,7 +312,7 @@ fn alloc_scalar_inputs(
 }
 
 /// Shared relation: commitment opening, context binding, and entry/risk bounds.
-fn position_relation(
+pub(crate) fn position_relation(
     cs: &ConstraintSystemRef<Fr>,
     opening: &Opening,
     public: &[FpVar<Fr>],

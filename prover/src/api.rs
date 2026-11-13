@@ -303,7 +303,7 @@ mod clock {
     }
 }
 
-fn timed_prove<C: ConstraintSynthesizer<Fr>>(
+pub(crate) fn timed_prove<C: ConstraintSynthesizer<Fr>>(
     pk: &ProvingKey<Bls12_381>,
     circuit: C,
     inputs: &[[u8; 32]],
