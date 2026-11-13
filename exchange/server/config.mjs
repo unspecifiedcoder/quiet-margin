@@ -121,6 +121,7 @@ export function loadConfig(env = process.env) {
     distDir: env.XYTHUM_DIST_DIR || fileURLToPath(new URL('../dist/', import.meta.url)),
     sessionDir: env.XYTHUM_SESSION_DIR || join(TESTNET_DIR, 'exchange-sessions'),
     provingDir: env.XYTHUM_PROVING_DIR || join(TESTNET_DIR, 'proving'),
+    poolProvingDir: env.XYTHUM_POOL_PROVING_DIR || join(TESTNET_DIR, 'shielded', 'keys'),
     marketWasm: env.MARKET_WASM || join(REPO_ROOT, 'target', 'near', 'xythum_near_perps.wasm'),
     marketWasmSha256: wasmPin,
     fingerprints,

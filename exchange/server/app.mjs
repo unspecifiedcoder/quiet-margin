@@ -53,6 +53,7 @@ const STATIC_TYPES = {
   '.ico': 'image/x-icon', '.wasm': 'application/wasm', '.woff2': 'font/woff2', '.txt': 'text/plain; charset=utf-8',
 };
 export const PROVING_FILES = Object.freeze({ '/api/proving/open.pk': 'open.pk', '/api/proving/close.pk': 'close.pk' });
+const POOL_PROVING_FILES = Object.freeze({ '/api/proving/pool-spend.pk': 'spend.pk', '/api/proving/pool-close.pk': 'close.pk' });
 
 function sendJson(res, status, body, headers = {}) {
   const data = Buffer.from(JSON.stringify(body));
@@ -201,10 +202,11 @@ export function createApp({ coordinator, config, log = () => {} }) {
         const [code, body] = await routes[key](req);
         status = code;
         sendJson(res, code, body);
-      } else if (req.method === 'GET' && PROVING_FILES[pathname]) {
+      } else if (req.method === 'GET' && (PROVING_FILES[pathname] || POOL_PROVING_FILES[pathname])) {
         route = 'GET ' + pathname;
         // Fixed file names only: the proving directory itself is never browsable.
-        const served = await sendFile(res, join(config.provingDir, PROVING_FILES[pathname]),
+        const directory = POOL_PROVING_FILES[pathname] ? config.poolProvingDir : config.provingDir;
+        const served = directory && await sendFile(res, join(directory, PROVING_FILES[pathname] ?? POOL_PROVING_FILES[pathname]),
           'application/octet-stream', 'no-cache');
         status = served ? 200 : 404;
         if (!served) sendJson(res, 404, { error: 'not_found', message: 'proving key is unavailable' });
