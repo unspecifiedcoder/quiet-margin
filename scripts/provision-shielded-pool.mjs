@@ -13,14 +13,16 @@ const wallet = parseEnv(readFileSync(file('.testnet/quiet-margin-wallet-recordin
 assert.equal(env.NEAR_NETWORK_ID, 'testnet');
 assert.equal(env.NEAR_RPC_URL, TESTNET_RPC);
 const args = process.argv.slice(2);
-const browserPool = args[0] === '--browser-pool';
+const judgePool = args[0] === '--judge-pool';
+const browserPool = judgePool || args[0] === '--browser-pool';
 if (browserPool) args.shift();
-const pool = (browserPool ? 'browser-pool.' : 'shielded.') + env.NEAR_DEMO_ACCOUNT_ID;
+const pool = (judgePool ? 'judge-pool.' : browserPool ? 'browser-pool.' : 'shielded.') + env.NEAR_DEMO_ACCOUNT_ID;
+const keyDir = judgePool ? 'judge-side-keys' : browserPool ? 'browser-keys' : 'keys';
 const token = env.NEAR_TOKEN_ACCOUNT_ID;
 const oracle = env.NEAR_ORACLE_ACCOUNT_ID;
 const maker = env.NEAR_DEMO_ACCOUNT_ID;
 const keys = Object.fromEntries(['spend', 'close'].map((kind) => {
-  const vk = readFileSync(file('.testnet/shielded/' + (browserPool ? 'browser-keys' : 'keys') + '/' + kind + '.vk'));
+  const vk = readFileSync(file('.testnet/shielded/' + keyDir + '/' + kind + '.vk'));
   return [kind, { bytes: vk.toString('base64'), fingerprint: createHash('sha256').update(vk).digest('base64') }];
 }));
 const wasm = readFileSync(file('target/' + (browserPool ? 'browser-pool' : 'pool-build') + '/wasm32-unknown-unknown/release/xythum_near_perps.wasm'));
@@ -33,7 +35,7 @@ const { DEMO, POOL, ORACLE } = await demoAccounts(chain, {
 });
 const view = (id, method, args) => viewFinal(chain, id, method, args);
 const record = { pool, token, oracle, wallet, keyFingerprints: { spend: keys.spend.fingerprint, close: keys.close.fingerprint } };
-const journal = file('.testnet/shielded/' + (browserPool ? 'browser-deployment.json' : 'deployment.json'));
+const journal = file('.testnet/shielded/' + (judgePool ? 'judge-deployment.json' : browserPool ? 'browser-deployment.json' : 'deployment.json'));
 try { Object.assign(record, JSON.parse(readFileSync(journal, 'utf8'))); }
 catch (error) { if (error.code !== 'ENOENT') throw error; }
 assert.equal(record.pool, pool);
@@ -94,9 +96,10 @@ for (const [name, id] of [['pool', pool], ['wallet', wallet]]) {
     }, 10n ** 22n));
   }
 }
-if (Number(poolView.maker_available) < 60_000) {
+const makerReserve = judgePool ? 360_000 : 60_000;
+if (Number(poolView.maker_available) < makerReserve) {
   await track('maker_reserve', call(DEMO, token, 'ft_transfer_call', {
-    receiver_id: pool, amount: '60000', msg: 'maker',
+    receiver_id: pool, amount: String(makerReserve - Number(poolView.maker_available)), msg: 'maker',
   }, 1n));
 }
 if (!poolView.round) await track('mark', call(ORACLE, pool, 'publish_mark', { price_ticks: 6880 }));
@@ -104,10 +107,10 @@ if (!record.wallet_funding && Number(await view(token, 'ft_balance_of', { accoun
   await track('wallet_funding', call(DEMO, token, 'ft_transfer', { receiver_id: wallet, amount: '10000' }, 1n));
 }
 const data = { pool, token, spendVk: keys.spend.fingerprint, closeVk: keys.close.fingerprint };
-if (browserPool) data.proofVersion = 'poseidon-v1';
+if (browserPool) data.proofVersion = judgePool ? 'poseidon-v2' : 'poseidon-v1';
 mkdirSync(file('exchange/public/shielded/'), { recursive: true });
 // Browser artifacts for a new deployment must be published together. Keep its
 // generated config beside its keys until the operator stages the static bundle.
-const configPath = browserPool ? '.testnet/shielded/browser-keys/config.json' : 'exchange/public/shielded/config.json';
+const configPath = browserPool ? '.testnet/shielded/' + keyDir + '/config.json' : 'exchange/public/shielded/config.json';
 writeFileSync(file(configPath), JSON.stringify(data, null, 2) + '\n');
 console.log(JSON.stringify(record, null, 2));
