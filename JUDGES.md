@@ -12,7 +12,13 @@ is offline.
 
 ## First look
 
-[Watch the Quiet Margin demo](docs/media/quiet-margin-demo.mp4). It shows burner creation, local signing, recovery in a fresh browser, deposit, open, close, and withdrawal. The split view shows the trader terminal beside the explorer for the same open.
+[Watch the Quiet Margin connected wallet demo](docs/media/quiet-margin-connected-trade.mp4).
+It shows a real NEAR wallet approval, private wallet recovery, capped test
+funding, a live BTC chart, and a full open, close and withdrawal. The split
+view shows the terminal and public explorer for the same trade.
+[Connected trade receipts](docs/CONNECTED-TRADE.md) link directly to the
+transactions and block. The [original recording](docs/media/quiet-margin-demo.mp4)
+is still available.
 
 ### Public testnet explorer
 
