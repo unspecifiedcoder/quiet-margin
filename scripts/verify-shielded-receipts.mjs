@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
 const browser = process.argv.includes('--browser');
-const evidenceFile = browser ? 'browser-pool-testnet-receipts.json' : 'shielded-testnet-receipts.json';
+const judge = process.argv.includes('--judge');
+const evidenceFile = judge ? 'judge-pool-testnet-receipts.json'
+  : browser ? 'browser-pool-testnet-receipts.json' : 'shielded-testnet-receipts.json';
 const evidence = JSON.parse(await readFile(new URL('../docs/' + evidenceFile, import.meta.url), 'utf8'));
 const { wallet, pool, token, deposits, lifecycle } = evidence;
 const rpc = 'https://test.rpc.fastnear.com';
@@ -58,7 +60,7 @@ const leaves = await Promise.all(deposits.map(async ({ hash, cents }) => {
 assert.equal(new Set(leaves).size, deposits.length);
 
 if (lifecycle) {
-  const { trader, open, close, withdrawal, block, height } = lifecycle;
+  const { trader, open, close, withdrawal, block, height, withdrawalCents = '10000' } = lifecycle;
   assert.notEqual(trader, wallet);
   const [opened, closed, exited, inclusion] = await Promise.all([
     tx(open, trader, pool, 'open_private'), tx(close, trader, pool, 'close_private'),
@@ -78,11 +80,25 @@ if (lifecycle) {
   assert.equal(event(closed, pool, 'position_closed').commitment, opened.args.commitment);
   assert.notEqual(event(closed, pool, 'position_closed').payout_note, empty);
   assert.equal(exited.args.recipient, wallet);
-  assert.equal(exited.args.amount, '10000');
+  assert.equal(exited.args.amount, withdrawalCents);
   assert.equal(event(exited, pool, 'withdrawn').change, empty);
   const transfer = event(exited, token, 'ft_transfer', 'nep141');
   assert.equal(transfer.old_owner_id, pool);
   assert.equal(transfer.new_owner_id, wallet);
-  assert.equal(transfer.amount, '10000');
+  assert.equal(transfer.amount, withdrawalCents);
   console.log('Private open, close, withdrawal and NEAR block verified.');
+}
+
+if (evidence.mark) {
+  const { hash, signer, priceTicks, round } = evidence.mark;
+  const [update, opened, closed] = await Promise.all([
+    tx(hash, signer, pool, 'publish_mark'),
+    tx(lifecycle.open, lifecycle.trader, pool, 'open_private'),
+    tx(lifecycle.close, lifecycle.trader, pool, 'close_private'),
+  ]);
+  assert.equal(update.args.price_ticks, priceTicks);
+  assert(opened.args.entry_ticks > priceTicks);
+  assert.equal(closed.args.round, round);
+  assert.equal(closed.args.maker_credit, '59900');
+  console.log('Controlled mark and +1 mUSDC maker adjustment verified.');
 }
