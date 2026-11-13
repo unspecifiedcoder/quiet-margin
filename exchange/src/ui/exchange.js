@@ -20,6 +20,7 @@ import {
   shortHash,
 } from './format.js';
 import { createMarkChart } from './chart.js';
+import { createSpotChart } from './spot-chart.js';
 
 /** Cold-start ticket: a valid 1.78x quote at a 100,000 USD mark that fits the fixed escrow. */
 const DEFAULT_SIZE = '0.008';
@@ -105,6 +106,7 @@ export function mountExchange(root, handlers = {}, options = {}) {
 
   // ---------- market strip ----------
   r.mark = h('strong', { class: 'xc-fig xc-fig--lg' });
+  r.spot = h('strong', { class: 'xc-fig xc-fig--lg', text: '—' });
   r.round = h('strong', { class: 'xc-fig' });
   r.funding = h('strong', { class: 'xc-fig' });
   r.change = h('strong', { class: 'xc-fig' });
@@ -113,7 +115,8 @@ export function mountExchange(root, handlers = {}, options = {}) {
     h('div', { class: 'xc-strip__pair' },
       h('h1', { class: 'xc-pair', text: 'BTC-PERP' }),
       h('span', { class: 'xc-muted', text: `Isolated long · ${COLLATERAL} margin · ≤ ${MAX_LEVERAGE}x` })),
-    figure('Oracle mark', r.mark, unit('USD')),
+    options.spot ? figure('BTC/USDT spot', r.spot, unit('USDT')) : null,
+    figure('NEAR oracle mark', r.mark, unit('USD')),
     figure('Round', r.round),
     figure('Funding index', r.funding, unit()),
     figure('Since first round', r.change, unit('USD')),
@@ -137,10 +140,10 @@ export function mountExchange(root, handlers = {}, options = {}) {
   const chartHost = h('div', { class: 'xc-chart-host' });
   r.chartCard = h('section', { class: 'xc-card xc-area-chart', id: `${id}-chart`, 'aria-labelledby': `${id}-chart-h` },
     h('div', { class: 'xc-card__head' },
-      h('h2', { id: `${id}-chart-h`, class: 'xc-card__title', text: 'BTC mark · oracle rounds' }),
+      h('h2', { id: `${id}-chart-h`, class: 'xc-card__title', text: options.spot ? 'BTC / USDT' : 'BTC mark · oracle rounds' }),
       r.chartMeta),
     chartHost);
-  const chart = createMarkChart(chartHost);
+  const chart = options.spot ? createSpotChart(chartHost, r.chartMeta, r.spot) : createMarkChart(chartHost);
 
   // ---------- fields ----------
   function field({ key, label, value, unitText, hint }) {
@@ -1160,6 +1163,7 @@ export function mountExchange(root, handlers = {}, options = {}) {
   }
 
   function renderChart() {
+    if (options.spot) return;
     const p = positionView();
     const hist = state.markHistory;
     r.chartCard.classList.toggle('is-empty', hist.length === 0);

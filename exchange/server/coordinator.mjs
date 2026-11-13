@@ -492,12 +492,28 @@ export class Coordinator {
 
   async #ensureInitialOracle(record) {
     if (await this.#view(record.market_id, 'get_oracle') === null) {
+      const sample = this.#hasLiveMarket(record) ? await this.#liveMark() : null;
       const tx = await this.#call('ORACLE', record.market_id, 'publish_oracle',
-        { round: 1, price_ticks: this.config.initialPriceTicks, funding_cents: 0 });
+        { round: 1, price_ticks: sample?.ticks ?? this.config.initialPriceTicks, funding_cents: 0 });
+      if (sample) record.mark_source_at = sample.as_of;
       await this.#receipt(record, 'mark_1', tx);
     }
     record.steps.initial_oracle = 'done';
     await this.#save(record);
+  }
+
+  #hasLiveMarket(record) {
+    return Boolean(this.config.liveMarket && record.wallet_claim_id);
+  }
+
+  async #liveMark() {
+    if (!this.marketData) throw new HttpError(503, 'market_data_unavailable', 'live BTC/USDT data is unavailable');
+    const { price, as_of } = await this.marketData.get();
+    const ticks = Math.round(price / 10);
+    if (!isInt(ticks, this.config.markMin, this.config.markMax)) {
+      throw new HttpError(503, 'market_price_range', 'live price is outside this market’s supported range');
+    }
+    return { ticks, as_of };
   }
 
   async #ensureTrader(record) {
@@ -575,6 +591,7 @@ export class Coordinator {
       rpc_url: this.rpcUrl,
       keeper_encryption_keys: [...this.keeperEncryptionKeys],
       keeper_armed: Boolean(record.keeper?.armed),
+      ...(this.#hasLiveMarket(record) && { live_market: true, mark_source_at: record.mark_source_at ?? null }),
       receipts: record.receipts.slice(-MAX_VIEW_RECEIPTS).map(({ label, hash }) => ({ label, hash })),
       ...(oracle ? { oracle } : {}),
       ledger,
@@ -648,6 +665,7 @@ export class Coordinator {
   }
 
   async mark(record, body) {
+    if (this.#hasLiveMarket(record)) throw new HttpError(403, 'live_market', 'this market uses live BTC/USDT prices');
     exactKeys(body, ['price_ticks']);
     const { price_ticks } = body;
     if (!isInt(price_ticks, this.config.markMin, this.config.markMax)) {
@@ -694,6 +712,7 @@ export class Coordinator {
     exactKeys(body, []);
     return this.#serial.run('session:' + record.key, async () => {
       const after = this.config.refreshAfterBlocks;
+      const sample = this.#hasLiveMarket(record) ? await this.#liveMark() : null;
       const finalOracle = async () => {
         const [oracle, height] = await Promise.all([
           this.#view(record.market_id, 'get_oracle'),
@@ -703,7 +722,10 @@ export class Coordinator {
         if (!Number.isSafeInteger(oracle.height) || !Number.isSafeInteger(height)) {
           throw new HttpError(502, 'oracle_unavailable', 'the oracle round height is unavailable');
         }
-        return { oracle, fresh: height - oracle.height < after };
+        const fresh = sample
+          ? height - oracle.height < after && this.now() - (record.mark_source_at ?? 0) < 75_000
+          : height - oracle.height < after;
+        return { oracle, fresh };
       };
       const observed = await finalOracle();
       if (observed.fresh) return { oracle: observed.oracle };
@@ -720,7 +742,7 @@ export class Coordinator {
           if (fresh) return { oracle: previous, tx: null };
           const round = previous.round + 1;
           const tx = await this.#callHeld('ORACLE', record.market_id, 'publish_oracle',
-            { round, price_ticks: previous.price_ticks, funding_cents: previous.funding_cents });
+            { round, price_ticks: sample?.ticks ?? previous.price_ticks, funding_cents: previous.funding_cents });
           const current = await this.#view(record.market_id, 'get_oracle');
           if (current?.round !== round) throw new Error('published oracle round is not final');
           return { oracle: current, tx };
@@ -732,6 +754,7 @@ export class Coordinator {
       this.#refreshRetryAt.delete(record.key);
       const { oracle, tx } = result;
       if (!tx) return { oracle };
+      if (sample) record.mark_source_at = sample.as_of;
       record.refreshes = (record.refreshes ?? 0) + 1;
       const receipt = await this.#receipt(record, 'refresh_' + oracle.round, tx);
       this.#wake?.(record.key);

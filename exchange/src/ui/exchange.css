@@ -73,6 +73,14 @@ html, body { margin: 0; background: #101721; }
 .xc-brand__mark::before, .xc-brand__mark::after { content: ''; width: 4px; border-radius: 1px; }
 .xc-brand__mark::before { height: 100%; background: var(--ink); }
 .xc-brand__mark::after { height: 62%; background: var(--act); }
+.xc-chart-host > svg { display: block; width: 100%; height: auto; }
+.xc-chart-host > svg[hidden] { display: none; }
+.xc-spot-grid { stroke: var(--line); }
+.xc-spot-axis { fill: var(--muted); font-size: 12px; }
+.xc-spot-up { fill: #6cdbbd; stroke: #6cdbbd; }
+.xc-spot-down { fill: #f290a5; stroke: #f290a5; }
+.xc-spot-last { stroke: var(--act); stroke-dasharray: 4 4; }
+.xc-spot-status { margin: 16px; }
 .xc-top__ctx { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .xc-tag {
   display: inline-flex; align-items: center; gap: 7px; padding: 3px 10px; min-height: 26px;

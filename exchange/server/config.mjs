@@ -127,6 +127,7 @@ export function loadConfig(env = process.env) {
     sessionQuota,
     walletFaucet,
     walletOrigin,
+    liveMarket: env.XYTHUM_LIVE_MARKET === '1',
     setupQueue: integer(env, 'XYTHUM_SETUP_QUEUE', 4, 1, 16),
     traderNear: nearAmount(env, 'XYTHUM_TRADER_NEAR', NEAR / 2n, 2n * NEAR),
     marketNear: env.XYTHUM_MARKET_NEAR ? nearAmount(env, 'XYTHUM_MARKET_NEAR', 0n, 6n * NEAR) : null,

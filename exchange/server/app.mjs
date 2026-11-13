@@ -123,6 +123,10 @@ export function createApp({ coordinator, config, log = () => {} }) {
       }
       return [201, await coordinator.claimFaucet(await readJson(req), origin, req.socket.remoteAddress)];
     },
+    'GET /api/market-data': async () => {
+      if (!coordinator.marketData) throw new HttpError(503, 'market_data_unavailable', 'live BTC/USDT data is unavailable');
+      return [200, await coordinator.marketData.get()];
+    },
     // The invite gate runs before the body is read and before the coordinator
     // (proof check, quota, cooldown, provisioning) sees the request.
     'POST /api/sessions': async (req) => {

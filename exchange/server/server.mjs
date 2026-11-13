@@ -11,6 +11,7 @@ import { childEnv, createActors } from './actors.mjs';
 import { createApp } from './app.mjs';
 import { loadConfig, TESTNET_DIR } from './config.mjs';
 import { Coordinator } from './coordinator.mjs';
+import { createMarketData } from './market-data.mjs';
 import { SessionStore } from './store.mjs';
 import { codeHashOf, connectTestnet, takeCredentials } from './testnet.mjs';
 import { safeMessage } from './util.mjs';
@@ -49,6 +50,7 @@ async function main() {
   // Fail fast if the keeper directory cannot be restricted to this user.
   await actors.prepare();
   const coordinator = new Coordinator({
+    marketData: createMarketData(),
     config, store, chain: testnet.chain, chainId: 'testnet', rpcUrl: testnet.rpcUrl, ids: testnet.ids,
     keeperAckKeys: testnet.keeperAckKeys, keeperEncryptionKeys: testnet.keeperEncryptionKeys,
     marketDeployKey: testnet.marketDeployKey,
