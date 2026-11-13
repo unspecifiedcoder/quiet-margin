@@ -233,7 +233,7 @@ export class PoolClient {
 
   async call(method, args, deposit = 0n) {
     await this.chain.resolveJournal();
-    const result = await this.chain.submit(method, this.pool, [functionCall(method, args, { gas: 120n * TGAS, deposit })]);
+    const result = await this.chain.call(method, this.pool, [functionCall(method, args, { gas: 120n * TGAS, deposit })]);
     return result.hash;
   }
 }
