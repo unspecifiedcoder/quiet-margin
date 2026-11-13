@@ -20,4 +20,4 @@ pub mod model;
 pub mod pool;
 pub mod pool_fast;
 #[path = "../../src/pool_poseidon.rs"]
-mod pool_poseidon;
+pub mod pool_poseidon;

@@ -5,6 +5,7 @@ use ark_crypto_primitives::sponge::{
 };
 use ark_r1cs_std::{fields::fp::FpVar, prelude::*};
 use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef, SynthesisError};
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 use base64::{Engine, engine::general_purpose::STANDARD};
 
 use crate::circuit::{enforce_bits, max_zero};
@@ -265,6 +266,7 @@ impl ConstraintSynthesizer<Fr> for FastClose {
     }
 }
 
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 pub(crate) fn prove_json<S: crate::browser::KeySource + ?Sized>(
     kind: &str,
     key: &S,
