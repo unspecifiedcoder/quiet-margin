@@ -1101,7 +1101,7 @@ export function mountExchange(root, handlers = {}, options = {}) {
       setText(li.lastChild, done[k] ? ' (done)' : current === k ? ' (current)' : '');
     }
 
-    r.startBtn.hidden = next !== 'cold';
+    r.startBtn.hidden = options.hideStart || next !== 'cold';
     r.startNote.hidden = next !== 'cold';
     // The private wallet link stays visible in every state, including for a
     // browser already connected here: it opens a separate route and leaves

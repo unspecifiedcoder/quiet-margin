@@ -1,16 +1,20 @@
 import { mountExchange } from './ui/exchange.js';
 import { createExchange } from './protocol/index.js';
+import { startConnectedExchange } from './ui/connected.js';
 
 const root = document.getElementById('app') ?? document.body;
 const allowSandbox = import.meta.env.VITE_ALLOW_SANDBOX === '1';
 const PRIVATE_WALLET_ROUTE = '?wallet=burner';
 
-if (new URLSearchParams(globalThis.location.search).get('wallet') === 'burner') {
+const route = new URLSearchParams(globalThis.location.search).get('wallet');
+if (route === 'burner') {
   // Private wallet route: a built-in testnet burner unlocks a separate private
   // trading wallet. It never auto-unlocks; the user signs explicitly each load.
   startPrivateWallet();
-} else {
+} else if (route === 'legacy' || allowSandbox) {
   startDefault();
+} else {
+  startConnectedExchange(root, { createExchange, mountExchange, allowSandbox });
 }
 
 function startDefault() {
@@ -40,7 +44,8 @@ function startDefault() {
 }
 
 async function startPrivateWallet() {
-  const homeHref = globalThis.location.pathname || '/';
+  const pathname = globalThis.location.pathname || '/';
+  const homeHref = pathname + '?wallet=legacy';
   try {
     const [{ startBurnerRoute }, burner] = await Promise.all([
       import('./ui/burner.js'),
@@ -58,7 +63,7 @@ async function startPrivateWallet() {
       allowSandbox,
       origin: globalThis.location.origin,
       homeHref,
-      routeHref: `${homeHref}${PRIVATE_WALLET_ROUTE}`,
+      routeHref: `${pathname}${PRIVATE_WALLET_ROUTE}`,
     });
   } catch {
     // Plain, retryable fallback: the route's code could not load or mount

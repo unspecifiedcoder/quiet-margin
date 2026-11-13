@@ -81,6 +81,12 @@ html, body { margin: 0; background: #101721; }
 .xc-spot-down { fill: #f290a5; stroke: #f290a5; }
 .xc-spot-last { stroke: var(--act); stroke-dasharray: 4 4; }
 .xc-spot-status { margin: 16px; }
+.xc-wallet-bar {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px;
+  padding: 10px clamp(12px, 2vw, 24px); border-bottom: 1px solid var(--line-2);
+}
+.xc-wallet-bar > span:first-child { margin-right: auto; overflow-wrap: anywhere; min-width: 0; }
+.xc-wallet-bar [role=alert]:empty { display: none; }
 .xc-top__ctx { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .xc-tag {
   display: inline-flex; align-items: center; gap: 7px; padding: 3px 10px; min-height: 26px;
