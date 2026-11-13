@@ -1,0 +1,798 @@
+{
+  "schema_version": "0.4.0",
+  "metadata": {
+    "name": "xythum-near-perps",
+    "version": "0.1.0"
+  },
+  "body": {
+    "functions": [
+      {
+        "name": "approve_quote",
+        "doc": " Maker approval of the exact pending position and quote digest.\n Expiry must be a future height and is inclusive for `open`.",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "nonce",
+              "type_schema": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0.0
+              }
+            },
+            {
+              "name": "commitment",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            },
+            {
+              "name": "quote_terms",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            },
+            {
+              "name": "open_price_ticks",
+              "type_schema": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0.0
+              }
+            },
+            {
+              "name": "expires_at",
+              "type_schema": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0.0
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "close",
+        "doc": " Voluntary trader close, regardless of health. No keeper bounty.",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "nonce",
+              "type_schema": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0.0
+              }
+            },
+            {
+              "name": "root",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            },
+            {
+              "name": "round",
+              "type_schema": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0.0
+              }
+            },
+            {
+              "name": "refund",
+              "type_schema": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0.0
+              }
+            },
+            {
+              "name": "bad_debt",
+              "type_schema": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0.0
+              }
+            },
+            {
+              "name": "proof",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "contract_source_metadata",
+        "kind": "view"
+      },
+      {
+        "name": "ft_on_transfer",
+        "doc": " NEP-141 receiver. Accepts the configured token only. Returns the\n unused amount, so anything not credited is refunded in full.",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "sender_id",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            },
+            {
+              "name": "amount",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "msg",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "$ref": "#/definitions/PromiseOrValueString"
+          }
+        }
+      },
+      {
+        "name": "get_active",
+        "kind": "view",
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/SlotView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "name": "get_config",
+        "kind": "view",
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "$ref": "#/definitions/ConfigView"
+          }
+        }
+      },
+      {
+        "name": "get_ledger",
+        "kind": "view",
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "$ref": "#/definitions/Ledger"
+          }
+        }
+      },
+      {
+        "name": "get_market",
+        "kind": "view",
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "$ref": "#/definitions/Base64VecU8"
+          }
+        }
+      },
+      {
+        "name": "get_oracle",
+        "kind": "view",
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/OracleRound"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "name": "get_pending",
+        "kind": "view",
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/SlotView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "name": "get_quote",
+        "kind": "view",
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/QuoteView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "name": "init",
+        "kind": "call",
+        "modifiers": [
+          "init",
+          "private"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "token_id",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            },
+            {
+              "name": "trader_id",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            },
+            {
+              "name": "maker_id",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            },
+            {
+              "name": "oracle_id",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            },
+            {
+              "name": "keepers",
+              "type_schema": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/definitions/KeeperInput"
+                }
+              }
+            },
+            {
+              "name": "deployment_id",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            },
+            {
+              "name": "open_vk",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            },
+            {
+              "name": "liquidation_vk",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            },
+            {
+              "name": "close_vk",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "liquidate",
+        "doc": " Keeper liquidation of an unhealthy position; credits the bounty to\n the submitting keeper.",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "nonce",
+              "type_schema": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0.0
+              }
+            },
+            {
+              "name": "root",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            },
+            {
+              "name": "round",
+              "type_schema": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0.0
+              }
+            },
+            {
+              "name": "refund",
+              "type_schema": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0.0
+              }
+            },
+            {
+              "name": "bad_debt",
+              "type_schema": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0.0
+              }
+            },
+            {
+              "name": "proof",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "open",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "nonce",
+              "type_schema": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0.0
+              }
+            },
+            {
+              "name": "commitment",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            },
+            {
+              "name": "acknowledgments",
+              "type_schema": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/definitions/Base64VecU8"
+                }
+              }
+            },
+            {
+              "name": "proof",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "publish_oracle",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "round",
+              "type_schema": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0.0
+              }
+            },
+            {
+              "name": "price_ticks",
+              "type_schema": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0.0
+              }
+            },
+            {
+              "name": "funding_cents",
+              "type_schema": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0.0
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "resolve_withdraw",
+        "doc": " Clears the in-flight claim on success, or restores it exactly once\n on failure. Returns whether the transfer succeeded.",
+        "kind": "call",
+        "modifiers": [
+          "private"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "account_id",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "boolean"
+          }
+        }
+      },
+      {
+        "name": "stage_position",
+        "doc": " Stages the single pending position. The latest fresh oracle round\n fixes the opening mark and the funding checkpoint committed in the\n position context. Restaging replaces the item and its approval.",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "nonce",
+              "type_schema": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0.0
+              }
+            },
+            {
+              "name": "commitment",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            },
+            {
+              "name": "quote_terms",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            },
+            {
+              "name": "ciphertexts",
+              "type_schema": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/definitions/Base64VecU8"
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "withdraw",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "amount",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "$ref": "#/definitions/Promise"
+          }
+        }
+      }
+    ],
+    "root_schema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "String",
+      "type": "string",
+      "definitions": {
+        "Base64VecU8": {
+          "description": "Helper class to serialize/deserialize `Vec<u8>` to base64 string.\n\n# Example ```rust use near_sdk::{json_types::Base64VecU8, near};\n\n#[near(serializers=[json])] struct NewStruct { field: Base64VecU8, } ```",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0.0
+          }
+        },
+        "ConfigView": {
+          "type": "object",
+          "required": [
+            "close_vk_sha256",
+            "deployment_id",
+            "keepers",
+            "key_version",
+            "liquidation_vk_sha256",
+            "maker_id",
+            "open_vk_sha256",
+            "oracle_id",
+            "token_id",
+            "trader_id"
+          ],
+          "properties": {
+            "close_vk_sha256": {
+              "$ref": "#/definitions/Base64VecU8"
+            },
+            "deployment_id": {
+              "$ref": "#/definitions/Base64VecU8"
+            },
+            "keepers": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/KeeperInput"
+              }
+            },
+            "key_version": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "liquidation_vk_sha256": {
+              "$ref": "#/definitions/Base64VecU8"
+            },
+            "maker_id": {
+              "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+              "type": "string"
+            },
+            "open_vk_sha256": {
+              "$ref": "#/definitions/Base64VecU8"
+            },
+            "oracle_id": {
+              "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+              "type": "string"
+            },
+            "token_id": {
+              "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+              "type": "string"
+            },
+            "trader_id": {
+              "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+              "type": "string"
+            }
+          }
+        },
+        "KeeperInput": {
+          "type": "object",
+          "required": [
+            "account_id",
+            "ack_key"
+          ],
+          "properties": {
+            "account_id": {
+              "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+              "type": "string"
+            },
+            "ack_key": {
+              "$ref": "#/definitions/Base64VecU8"
+            }
+          }
+        },
+        "Ledger": {
+          "type": "object",
+          "required": [
+            "bad_debt",
+            "halted",
+            "keeper_available",
+            "maker_reserved",
+            "maker_vault",
+            "next_nonce",
+            "pending_withdrawals",
+            "trader_available",
+            "trader_locked"
+          ],
+          "properties": {
+            "bad_debt": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "halted": {
+              "type": "boolean"
+            },
+            "keeper_available": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0.0
+              },
+              "maxItems": 2,
+              "minItems": 2
+            },
+            "maker_reserved": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "maker_vault": {
+              "description": "Inclusive of `maker_reserved`.",
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "next_nonce": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "pending_withdrawals": {
+              "description": "Total cents currently in flight to claimants.",
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "trader_available": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "trader_locked": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            }
+          }
+        },
+        "OracleRound": {
+          "type": "object",
+          "required": [
+            "funding_cents",
+            "height",
+            "price_ticks",
+            "round"
+          ],
+          "properties": {
+            "funding_cents": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "height": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "price_ticks": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "round": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            }
+          }
+        },
+        "Promise": true,
+        "PromiseOrValueString": {
+          "type": "string"
+        },
+        "QuoteView": {
+          "type": "object",
+          "required": [
+            "commitment",
+            "expires_at",
+            "nonce",
+            "open_price_ticks",
+            "quote_terms"
+          ],
+          "properties": {
+            "commitment": {
+              "$ref": "#/definitions/Base64VecU8"
+            },
+            "expires_at": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "nonce": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "open_price_ticks": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "quote_terms": {
+              "$ref": "#/definitions/Base64VecU8"
+            }
+          }
+        },
+        "SlotView": {
+          "type": "object",
+          "required": [
+            "ciphertexts",
+            "commitment",
+            "funding_checkpoint",
+            "nonce",
+            "open_price_ticks",
+            "quote_terms"
+          ],
+          "properties": {
+            "ciphertexts": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            },
+            "commitment": {
+              "$ref": "#/definitions/Base64VecU8"
+            },
+            "funding_checkpoint": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "nonce": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "open_price_ticks": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "quote_terms": {
+              "$ref": "#/definitions/Base64VecU8"
+            }
+          }
+        }
+      }
+    }
+  }
+}

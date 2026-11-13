@@ -33,6 +33,41 @@ is still available.
 The rejection and the Keeper B success are a pair from the same position in
 a separate run from the browser open.
 
+| Contract mark | Position equity | Maintenance required | Result |
+| --- | --- | --- | --- |
+| $70,000 | 198 mUSDC | 35 mUSDC | Healthy. NEAR rejects the liquidation proof and leaves the position open. |
+| $52,000 | 18 mUSDC | 26 mUSDC | Below maintenance. NEAR accepts Keeper B's liquidation. |
+
+Equity is the position's margin plus unrealized PnL minus funding owed.
+Maintenance is 5% of current position value. In the rejection test, Keeper B
+submitted a proof built for a $52,000 mark while the contract's round recorded
+$70,000. The contract uses its own oracle state to verify the proof.
+
+The browser trade in the video used 275 mUSDC of position margin on a 0.010
+BTC long. The trader can see both values and the estimated liquidation price.
+The public ledger shows a fixed 600 mUSDC escrow, which is the total collateral
+locked per position. The open call contains a commitment and proof, and the
+public mark lets observers infer entry for this client. The market accepts
+one confidential long at a time per deployment. A separate public trading
+mode, where the position terms go directly into chain state, was outside
+this implementation.
+
+### Read the contract in NearBlocks
+
+Open the [ABI-enabled market's Methods tab](https://testnet.nearblocks.io/address/market-abi.qm-treasury-a280bef3.testnet/contract/methods)
+and select `get_config`, `get_ledger`, or `get_active`. Read methods require
+no wallet. NearBlocks reads the ABI from the contract's `__contract_abi`
+view, which exposes the method signatures and argument types.
+The [NearBlocks schema API](https://api-testnet.nearblocks.io/v3/accounts/market-abi.qm-treasury-a280bef3.testnet/contract/schema)
+and [downloadable ABI](demo/market-abi.json) expose the same interface.
+
+The ABI-enabled market is a separate testnet deployment of the same
+contract source and verifier keys. It has an empty ledger and no open
+position. Use the recorded market and receipts above for the trading
+and liquidation evidence. The recorded market is locked and was built
+without an embedded ABI.
+[ABI deployment receipt](https://testnet.near.rocks/tx/CNtdhuLfkcWnHX35DBaVV1hj3dc83Bn5AndqJhqZ6AYN).
+
 ### Try it
 
 1. **Testnet consumer app.** The real app in [`exchange/`](exchange/). Its
