@@ -1,0 +1,7 @@
+{
+  "pool": "judge-pool.qm-treasury-a280bef3.testnet",
+  "token": "musdc.qm-treasury-a280bef3.testnet",
+  "spendVk": "IXaQZNlKQE0HISm98aI6zCBODF/DDicQ0idarpnocbs=",
+  "closeVk": "hK38gQZ6BJ2fNNs5/TP6n6SqcRglbFGU3GOoJOvst6w=",
+  "proofVersion": "poseidon-v2"
+}

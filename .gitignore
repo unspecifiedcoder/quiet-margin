@@ -15,3 +15,5 @@
 /exchange/public/prover/snippets/
 /exchange/public/shielded/*
 !/exchange/public/shielded/browser-pool/
+!/exchange/public/shielded/judge-pool/
+/exchange/public/shielded/judge-pool/*.d.ts
