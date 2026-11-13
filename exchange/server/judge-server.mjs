@@ -7,6 +7,7 @@ import { loadConfig } from './config.mjs';
 import { createMarketData } from './market-data.mjs';
 import { createPoolFunding } from './pool-funding.mjs';
 import { connectPoolSponsor } from './pool-sponsor.mjs';
+import { loadPoolHashes, poolKeeper } from './pool-keepers.mjs';
 import { SessionStore } from './store.mjs';
 
 const origin = process.env.QUIET_POOL_ORIGIN;
@@ -32,7 +33,19 @@ if (process.env.QUIET_POOL_SPONSOR_KEY) {
   store = await new SessionStore(resolve(process.env.QUIET_POOL_FUNDING_DIR)).open();
   poolFunding = createPoolFunding({ chain, sponsor, token: deployment.token, origin: parsed.origin, store, quota });
 }
-const app = createApp({ coordinator, config, poolFunding });
+let poolKeeperAck;
+if (process.env.QUIET_POOL_KEEPER_FILE) {
+  const configFile = JSON.parse(await readFile(resolve(process.env.QUIET_POOL_KEEPER_FILE), 'utf8'));
+  const hashes = await loadPoolHashes(fileURLToPath(new URL('../dist/shielded/judge-pool/xythum_prover.js', import.meta.url)));
+  const pools = new Map(configFile.pools.map((pool) => [pool, configFile.keepers.map((keeper, index) =>
+    poolKeeper({ pool, hashes, index, ...keeper }))]));
+  poolKeeperAck = (pool, index, envelope) => {
+    const keepers = pools.get(pool);
+    if (!keepers) throw new Error('Pool not configured for keeper acknowledgment.');
+    return keepers[index].acknowledge(envelope);
+  };
+}
+const app = createApp({ coordinator, config, poolFunding, poolKeeperAck });
 const server = createServer((req, res) => {
   if ((req.method === 'GET' || req.method === 'HEAD') && req.url === '/') {
     res.writeHead(302, { Location: '/shielded', 'Cache-Control': 'no-store' }).end();

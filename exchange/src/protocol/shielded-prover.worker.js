@@ -1,7 +1,7 @@
 self.onmessage = async ({ data: { kind, fingerprint, witness, version } }) => {
   try {
     if (kind !== 'spend' && kind !== 'close') throw new Error('Unknown proof type.');
-    const judge = version === 'poseidon-v2';
+    const judge = version === 'poseidon-v2' || version === 'poseidon-v3';
     const browserPool = judge || version === 'poseidon-v1';
     const directory = judge ? '/shielded/judge-pool' : '/shielded/browser-pool';
     const artifact = browserPool ? directory + '/xythum_prover.js' : '/shielded/prover/xythum_prover.js';

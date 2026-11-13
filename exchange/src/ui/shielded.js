@@ -9,6 +9,7 @@ import './shielded.css';
 
 const money = (cents) => (cents / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const el = (id) => document.getElementById('sp-' + id);
+const hasSides = (version) => ['poseidon-v2', 'poseidon-v3'].includes(version);
 const explorer = 'https://testnet.near.rocks';
 
 function localProof(kind, fingerprint, witness, version) {
@@ -87,11 +88,12 @@ export async function mountShieldedPool(root) {
           </form>
           <p id="sp-note-count" class="xc-muted xc-small"></p>
           <details>
-            <summary>Withdraw or back up notes</summary>
+            <summary>Send to a public address or back up notes</summary>
+            <p class="xc-small xc-muted">Leave funds in your shielded balance to trade again. A standard token withdrawal shows its amount and destination on NEAR.</p>
             <form id="sp-exit">
-              <label>Recipient <input class="sp-input" name="recipient" type="text" required autocomplete="off"></label>
+              <label>Public NEAR recipient <input class="sp-input" name="recipient" type="text" required autocomplete="off"></label>
               <label>Amount <input class="sp-input" name="amount" type="text" inputmode="decimal" required placeholder="0.00" autocomplete="off"></label>
-              <button class="xc-btn xc-btn--ghost">Withdraw mUSDC</button>
+              <button class="xc-btn xc-btn--ghost">Withdraw to NEAR</button>
             </form>
             <p class="xc-small xc-muted">Keep an encrypted backup after each change to recover your notes on another browser.</p>
             <div class="sp-tools"><button id="sp-export" class="xc-btn xc-btn--ghost" type="button">Export backup</button>
@@ -101,7 +103,7 @@ export async function mountShieldedPool(root) {
         <section class="sp-panel" aria-labelledby="sp-position">
           <h2 id="sp-position">BTC / USD Perpetual</h2>
           <dl class="sp-stats">
-            <div><dt>Testnet settlement mark</dt><dd><strong id="sp-mark">—</strong></dd></div>
+            <div><dt><span id="sp-mark-label">Testnet settlement mark</span></dt><dd><strong id="sp-mark">—</strong></dd></div>
             <div><dt>Private margin</dt><dd class="is-pos"><strong id="sp-margin">—</strong> <small>mUSDC</small></dd></div>
           </dl>
           <form id="sp-open">
@@ -111,7 +113,7 @@ export async function mountShieldedPool(root) {
             <div class="sp-order-actions"><button class="xc-btn xc-btn--act" value="long">Open private long</button>
               <button class="xc-btn xc-btn--ghost" id="sp-short" value="short" hidden>Open private short</button></div>
           </form>
-          <div id="sp-active" hidden><p id="sp-position-info"></p><p id="sp-pnl" class="xc-small"></p><button id="sp-close" class="xc-btn xc-btn--ghost">Close position</button></div>
+          <div id="sp-active" hidden><p id="sp-position-info"></p><p class="xc-small xc-muted" id="sp-liquidation"></p><p id="sp-pnl" class="xc-small"></p><button id="sp-close" class="xc-btn xc-btn--ghost">Close position</button></div>
           <p class="xc-muted xc-small">Test assets · maximum 3× leverage</p>
         </section>
         <section class="sp-panel sp-evidence" aria-labelledby="sp-evidence">
@@ -133,6 +135,10 @@ export async function mountShieldedPool(root) {
     el('desk').hidden = !client;
     for (const element of el('desk').querySelectorAll('button, input')) element.disabled = working;
     for (const element of el('desk').querySelectorAll('form button, #sp-close')) element.disabled ||= !gasReady;
+    if (data?.oracle && (!data.oracle.observed_at || Date.now() / 1000 - data.oracle.observed_at > 90)) {
+      for (const button of el('open').querySelectorAll('button')) button.disabled = true;
+      el('close').disabled = true;
+    }
     el('fund').hidden = !funding || !client || (gasReady && (data?.wallet || data?.balance || data?.position));
   };
 
@@ -161,8 +167,12 @@ export async function mountShieldedPool(root) {
     if (!data) return;
     el('wallet').textContent = money(data.wallet);
     el('balance').textContent = money(data.balance);
-    el('mark').textContent = '$' + (data.state.price_ticks * 10).toLocaleString('en-US');
+    const stale = data.oracle && (!data.oracle.observed_at || Date.now() / 1000 - data.oracle.observed_at > 90);
+    el('mark').textContent = stale ? 'Stale' : '$' + (data.state.price_ticks * 10).toLocaleString('en-US');
     el('margin').textContent = money(data.position?.margin ?? 0);
+    const newest = data.records.positions.at(-1);
+    const liquidated = newest && data.liquidations?.find((row) => row.commitment === newest.commitment);
+    el('position').textContent = liquidated ? 'BTC / USD Perpetual � Last position liquidated' : 'BTC / USD Perpetual';
     el('note-count').textContent = data.live.length + (data.live.length === 1 ? ' available note' : ' available notes');
     el('open').hidden = Boolean(data.position);
     el('active').hidden = !data.position;
@@ -170,6 +180,8 @@ export async function mountShieldedPool(root) {
     if (data.position) {
       el('position-info').textContent = (data.position.short ? 'Short ' : 'Long ') + (data.position.lots / 1_000).toFixed(3) + ' BTC · entry $' + (data.position.entry * 10).toLocaleString('en-US');
       const pnl = Math.max(-data.position.margin, Math.min(60_000, (data.state.price_ticks - data.position.entry) * data.position.lots * (data.position.short ? -1 : 1)));
+      el('liquidation').textContent = client.keeperConfig
+        ? 'Offline keeper protection � liquidates at or below 5% maintenance margin' : '';
       el('pnl').textContent = 'Estimated P&L ' + (pnl > 0 ? '+' : '') + money(pnl) + ' mUSDC at the testnet mark';
     }
   }
@@ -218,12 +230,20 @@ export async function mountShieldedPool(root) {
     const trader = await unlockConnectedTrader(wallet, account, location.origin);
     let hashes;
     if (config.proofVersion) {
-      const artifact = '/shielded/' + (config.proofVersion === 'poseidon-v2' ? 'judge-pool' : 'browser-pool') + '/xythum_prover.js';
+      const artifact = '/shielded/' + (hasSides(config.proofVersion) ? 'judge-pool' : 'browser-pool') + '/xythum_prover.js';
       const wasm = await import(/* @vite-ignore */ artifact);
       await wasm.default();
-      hashes = poseidonPool(wasm, config.proofVersion === 'poseidon-v2');
+      hashes = poseidonPool(wasm, hasSides(config.proofVersion));
     }
     const next = new PoolClient({ account, wallet, trader, pool: config.pool, token: config.token, hashes,
+      async keeperAck(index, payload) {
+        const response = await fetch('/api/pool/keeper-ack', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pool: config.pool, index, ...payload }), signal: AbortSignal.timeout(15_000),
+        });
+        if (!response.ok) throw new Error('Keeper acknowledgment unavailable. Try again.');
+        return (await response.json()).acknowledgment;
+      },
       prove(kind, fingerprint, witness) {
         const expected = kind === 'spend' ? config.spendVk : config.closeVk;
         if (fingerprint !== expected) throw new Error('The pool verifying key differs from this deployment.');
@@ -295,17 +315,19 @@ export async function mountShieldedPool(root) {
   await run('Loading pool…', async () => {
     const selected = new URLSearchParams(location.search).get('pool');
     const original = selected === 'legacy';
-    const path = original ? '/shielded/config.json' : '/shielded/' + (selected === 'browser' ? 'browser-pool' : 'judge-pool') + '/config.json';
+    const keeper = selected === 'keeper' || selected === 'live';
+    const path = keeper ? '/shielded/judge-pool/' + selected + '-config.json' : original ? '/shielded/config.json' : '/shielded/' + (selected === 'browser' ? 'browser-pool' : 'judge-pool') + '/config.json';
     const response = await fetch(path,
       { signal: AbortSignal.timeout(10_000) });
     if (!response.ok) throw new Error('The shielded pool is unavailable on this host.');
     const deployment = await response.json();
     if (![deployment.pool, deployment.token].every(isAccountId)) throw new Error('Invalid shielded pool deployment.');
     config = deployment;
-    el('short').hidden = deployment.proofVersion !== 'poseidon-v2';
+    if (deployment.liveOracle) el('mark-label').textContent = 'Live BTC settlement mark';
+    el('short').hidden = !hasSides(deployment.proofVersion);
     const health = await fetch('/api/health', { signal: AbortSignal.timeout(3_000) })
       .then((response) => response.ok ? response.json() : null).catch(() => null);
-    funding = deployment.proofVersion === 'poseidon-v2' && health?.pool_funding === true;
+    funding = hasSides(deployment.proofVersion) && health?.pool_funding === true;
     if (!deployment.proofVersion && location.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(location.hostname)) {
       desktopHelper = health?.local_pool_prover === true;
     }
