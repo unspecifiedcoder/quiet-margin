@@ -3,9 +3,9 @@ use std::io::{BufWriter, Read, Write};
 use std::path::Path;
 
 use ark_bls12_381::{Bls12_381, Fr};
-use ark_groth16::Groth16;
+use ark_groth16::{Groth16, ProvingKey};
 use ark_relations::r1cs::ConstraintSynthesizer;
-use ark_serialize::CanonicalSerialize;
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_snark::SNARK;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use rand::rngs::OsRng;
@@ -43,6 +43,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             setup(dir, "spend", Spend::default())?;
             setup(dir, "close", Close::default())?;
         }
+        [command, source, output] if command == "uncompress" => {
+            let file = std::fs::File::open(source)?;
+            let key = ProvingKey::<Bls12_381>::deserialize_compressed_unchecked(
+                std::io::BufReader::new(file),
+            )?;
+            let output = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(output)?;
+            let mut writer = BufWriter::new(output);
+            key.serialize_uncompressed(&mut writer)?;
+            writer.flush()?;
+        }
         [command, dir, kind]
             if command == "prove" && ["spend", "close"].contains(&kind.as_str()) =>
         {
@@ -57,7 +70,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 pool::prove_json(kind, key.as_slice(), &fingerprint, &input)?
             );
         }
-        _ => return Err("Usage: quiet-pool-prover setup DIR | prove DIR spend|close".into()),
+        _ => return Err(
+            "Usage: quiet-pool-prover setup DIR | prove DIR spend|close | uncompress SOURCE OUTPUT"
+                .into(),
+        ),
     }
     Ok(())
 }
