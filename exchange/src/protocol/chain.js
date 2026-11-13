@@ -40,8 +40,8 @@ const definitive = (error) => error instanceof RpcError
 
 export class Chain {
   constructor({ rpc, store, signer, accountId, onReceipt, sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
-    now = () => Date.now(), finalWaitMs = FINAL_WAIT_MS }) {
-    Object.assign(this, { rpc, store, signer, accountId, onReceipt, sleep, now, finalWaitMs });
+    now = () => Date.now(), finalWaitMs = FINAL_WAIT_MS, broadcastWaitUntil = 'NONE' }) {
+    Object.assign(this, { rpc, store, signer, accountId, onReceipt, sleep, now, finalWaitMs, broadcastWaitUntil });
   }
 
   journal() {
@@ -81,7 +81,7 @@ export class Chain {
     await this.store.put('nonce', nonce);
     this.onReceipt?.({ label, hash, status: 'pending' });
     try {
-      await this.rpc.sendTx(signedTx);
+      await this.broadcast(signedTx);
     } catch (error) {
       if (definitive(error)) {
         await this.store.delete(JOURNAL);
@@ -95,13 +95,17 @@ export class Chain {
     return result;
   }
 
+  broadcast(signedTx) {
+    return this.rpc.sendTx(signedTx, { waitUntil: this.broadcastWaitUntil });
+  }
+
   async finalize(entry) {
     const deadline = this.now() + this.finalWaitMs;
     let lastError;
     let unknown = 0;
     while (this.now() < deadline) {
       try {
-        const outcome = await this.rpc.txFinal(entry.hash, entry.senderId);
+        const outcome = await (this.rpc.txStatus ?? this.rpc.txFinal).call(this.rpc, entry.hash, entry.senderId);
         if (outcome.final_execution_status && outcome.final_execution_status !== 'FINAL') {
           lastError = new Error('not final yet');
         } else {
@@ -118,7 +122,7 @@ export class Chain {
         if (error instanceof RpcError && error.kind === 'UNKNOWN_TRANSACTION') {
           unknown += 1;
           try {
-            await this.rpc.sendTx(entry.signedTx);
+            await this.broadcast(entry.signedTx);
           } catch (sendError) {
             if (definitive(sendError) && unknown >= 3) {
               // The nonce was consumed or the block hash expired, and the

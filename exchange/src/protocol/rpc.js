@@ -74,7 +74,7 @@ export class Rpc {
     }
     if (body.error) {
       const kind = body.error.cause?.name ?? body.error.name ?? 'RPC_ERROR';
-      const detail = body.error.cause?.info ?? body.error.data ?? body.error.message;
+      const detail = body.error.data ?? body.error.cause?.info ?? body.error.message;
       throw new RpcError(method + ': ' + kind + ' ' + JSON.stringify(detail), { kind, data: body.error });
     }
     if (!response.ok) throw new RpcError('RPC HTTP ' + response.status, { kind: 'NETWORK' });
@@ -99,15 +99,19 @@ export class Rpc {
     });
   }
 
-  /** Broadcasts without waiting; validation errors are thrown. */
-  sendTx(signedTx) {
-    return this.call('send_tx', { signed_tx_base64: signedTx, wait_until: 'NONE' });
+  /** Broadcasts a signed transaction with the requested execution threshold. */
+  sendTx(signedTx, { waitUntil = 'NONE' } = {}) {
+    return this.call('send_tx', { signed_tx_base64: signedTx, wait_until: waitUntil }, { timeoutMs: 30_000 });
   }
 
   /** One bounded wait for FINAL; throws TIMEOUT_ERROR / UNKNOWN_TRANSACTION. */
   txFinal(hash, senderId) {
     return this.call('tx', { tx_hash: hash, sender_account_id: senderId, wait_until: 'FINAL' },
       { timeoutMs: 30_000 });
+  }
+
+  txStatus(hash, senderId) {
+    return this.call('tx', { tx_hash: hash, sender_account_id: senderId, wait_until: 'NONE' });
   }
 }
 
