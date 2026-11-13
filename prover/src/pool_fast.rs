@@ -110,12 +110,12 @@ fn member<const D: usize>(
 fn position_vars(
     cs: &ConstraintSystemRef<Fr>,
     context: Var,
-    blinder: &Hash,
+    blinder_bytes: &Hash,
     lots: u16,
     entry: u16,
     margin: u32,
     short: &Boolean<Fr>,
-) -> Result<(Var, Var, Var, Var), SynthesisError> {
+) -> Result<(Var, Var, Var, Var, Var), SynthesisError> {
     let lots = Var::new_witness(cs.clone(), || Ok(Fr::from(lots)))?;
     let entry = Var::new_witness(cs.clone(), || Ok(Fr::from(entry)))?;
     let margin = Var::new_witness(cs.clone(), || Ok(Fr::from(margin)))?;
@@ -129,16 +129,17 @@ fn position_vars(
         32,
     )?;
     enforce_bits(cs, &(&margin * Fr::from(3u64) - &entry * &lots), 48)?;
-    let blinder = Var::new_witness(cs.clone(), || Ok(field(blinder)))?;
+    let blinder = Var::new_witness(cs.clone(), || Ok(field(blinder_bytes)))?;
     let packed = &lots
         + &entry * Fr::from(1u64 << 16)
         + &margin * Fr::from(1u64 << 32)
         + Boolean::le_bits_to_fp(std::slice::from_ref(short))? * Fr::from(1u128 << 64);
     Ok((
-        hash_var(cs, h::POSITION, vec![context, blinder, packed])?,
+        hash_var(cs, h::POSITION, vec![context, blinder.clone(), packed])?,
         lots,
         entry,
         margin,
+        blinder,
     ))
 }
 
@@ -228,7 +229,7 @@ impl<const D: usize> ConstraintSynthesizer<Fr> for FastSpend<D> {
         } else {
             Boolean::FALSE
         };
-        let (commitment, lots, entry, margin) = position_vars(
+        let (commitment, lots, entry, margin, _) = position_vars(
             &cs,
             p[6].clone(),
             &w.blinder,
@@ -296,7 +297,7 @@ impl<const SIDES: bool> ConstraintSynthesizer<Fr> for FastClose<SIDES> {
         } else {
             Boolean::FALSE
         };
-        let (commitment, lots, entry, margin) = position_vars(
+        let (commitment, lots, entry, margin, _) = position_vars(
             &cs,
             p[1].clone(),
             &w.blinder,
@@ -322,6 +323,87 @@ impl<const SIDES: bool> ConstraintSynthesizer<Fr> for FastClose<SIDES> {
         let cap = Var::Constant(Fr::from(PNL_CAP_CENTS));
         let excess = max_zero(&cs, &(&pnl - &cap))?;
         cents.enforce_equal(&max_zero(&cs, &(&margin + pnl - excess))?)?;
+        (&cap + margin - cents).enforce_equal(&p[7])
+    }
+}
+
+/// The keeper receives the position opening, but never the note owner secret.
+/// The payout salt is fixed by the opening, so the trader can recover the note.
+#[derive(Clone, Default, serde::Deserialize, serde::Serialize)]
+pub struct Liquidation {
+    pub commitment: Hash,
+    pub context: Hash,
+    pub blinder: Hash,
+    pub lots: u16,
+    pub entry: u16,
+    pub margin: u32,
+    pub short: bool,
+    pub domain: Hash,
+    pub owner_tag: Hash,
+    pub price: u16,
+    pub round: u64,
+}
+
+impl Liquidation {
+    pub fn payout(&self) -> u64 {
+        let movement =
+            (i64::from(self.price) - i64::from(self.entry)) * if self.short { -1 } else { 1 };
+        (i64::from(self.margin) + (movement * i64::from(self.lots)).min(PNL_CAP_CENTS as i64))
+            .max(0) as u64
+    }
+
+    pub fn public(&self) -> Vec<Hash> {
+        let cents = self.payout();
+        let inner = encode(hash(
+            h::INNER,
+            &[field(&self.owner_tag), field(&self.blinder)],
+        ));
+        let payout = if cents == 0 {
+            ZERO
+        } else {
+            h::leaf(&self.domain, &inner, cents)
+        };
+        vec![
+            self.commitment,
+            self.context,
+            self.domain,
+            self.owner_tag,
+            payout,
+            crate::encoding::u64_scalar(u64::from(self.price)),
+            crate::encoding::u64_scalar(self.round),
+            crate::encoding::u64_scalar(u64::from(PNL_CAP_CENTS) + u64::from(self.margin) - cents),
+        ]
+    }
+}
+
+impl ConstraintSynthesizer<Fr> for Liquidation {
+    fn generate_constraints(self, cs: ConstraintSystemRef<Fr>) -> Result<(), SynthesisError> {
+        let p = allocate(&cs, &self.public())?;
+        let short = Boolean::new_witness(cs.clone(), || Ok(self.short))?;
+        let (commitment, lots, entry, margin, blinder) = position_vars(
+            &cs,
+            p[1].clone(),
+            &self.blinder,
+            self.lots,
+            self.entry,
+            self.margin,
+            &short,
+        )?;
+        commitment.enforce_equal(&p[0])?;
+        enforce_bits(&cs, &p[5], 16)?;
+        enforce_bits(&cs, &p[6], 64)?;
+        let movement = &p[5] - entry;
+        let pnl = short.select(&(Var::zero() - &movement), &movement)? * &lots;
+        let equity = &margin + &pnl;
+        // Liquidate at or below 5% maintenance, using exact integer math.
+        let threshold = &p[5] * lots - equity * Fr::from(20u64);
+        enforce_bits(&cs, &threshold, 48)?;
+        let cap = Var::Constant(Fr::from(PNL_CAP_CENTS));
+        let excess = max_zero(&cs, &(&pnl - &cap))?;
+        let cents = max_zero(&cs, &(&margin + pnl - excess))?;
+        let inner = hash_var(&cs, h::INNER, vec![p[3].clone(), blinder])?;
+        let leaf = hash_var(&cs, h::LEAF, vec![p[2].clone(), inner, cents.clone()])?;
+        bind_note(leaf, &cents, &p[4])?;
         (&cap + margin - cents).enforce_equal(&p[7])
     }
 }

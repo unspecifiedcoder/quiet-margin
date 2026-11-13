@@ -10,10 +10,10 @@ use ark_snark::SNARK;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use rand::rngs::OsRng;
 use xythum_prover::{
-    encoding::vk_bytes,
+    encoding::{proof_bytes, scalars_to_fr, vk_bytes},
     model::sha256,
     pool::{self, Close, Spend},
-    pool_fast::{FastClose, FastSpend},
+    pool_fast::{FastClose, FastSpend, Liquidation},
 };
 
 fn setup<C: ConstraintSynthesizer<Fr>>(
@@ -33,6 +33,19 @@ fn setup<C: ConstraintSynthesizer<Fr>>(
     fs::write(dir.join(format!("{kind}.vk")), &raw)?;
     eprintln!("{kind} key: {}", STANDARD.encode(sha256(&[&raw])));
     Ok(())
+}
+
+fn prove<C: ConstraintSynthesizer<Fr>>(
+    key: &ProvingKey<Bls12_381>,
+    circuit: C,
+    inputs: &[[u8; 32]],
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let proof = Groth16::<Bls12_381>::prove(key, circuit, &mut OsRng)?;
+    let prepared = Groth16::<Bls12_381>::process_vk(&key.vk)?;
+    if !Groth16::<Bls12_381>::verify_with_processed_vk(&prepared, &scalars_to_fr(inputs), &proof)? {
+        return Err("Proof does not verify.".into());
+    }
+    Ok(proof_bytes(&proof).to_vec())
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -55,6 +68,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             fs::create_dir(dir)?;
             setup(dir, "spend", FastSpend::<6>::default())?;
             setup(dir, "close", FastClose::<true>::default())?;
+        }
+        [command, dir] if command == "setup-liquidation" => {
+            let dir = Path::new(dir);
+            fs::create_dir(dir)?;
+            setup(dir, "liquidation", Liquidation::default())?;
+        }
+        [command, dir, kind] if command == "prove-pool-v3" => {
+            let dir = Path::new(dir);
+            let key = ProvingKey::<Bls12_381>::deserialize_uncompressed(
+                std::io::BufReader::new(fs::File::open(dir.join(format!("{kind}.pk")))?),
+            )?;
+            let mut input = String::new();
+            std::io::stdin().take(20_001).read_to_string(&mut input)?;
+            let (proof, extra) = match kind.as_str() {
+                "liquidation" => {
+                    let w: Liquidation = serde_json::from_str(&input)?;
+                    let public = w.public();
+                    let credit = u64::from_le_bytes(public[7][..8].try_into()?);
+                    (prove(&key, w, &public)?,
+                        serde_json::json!({"payout": STANDARD.encode(public[4]), "maker_credit": credit.to_string()}))
+                }
+                "close" => {
+                    let w = FastClose::<true>(serde_json::from_str(&input)?);
+                    let public = w.public();
+                    (prove(&key, w, &public)?, serde_json::json!({}))
+                }
+                "spend" => {
+                    let w = FastSpend::<6>(serde_json::from_str(&input)?);
+                    let public = w.public();
+                    (prove(&key, w, &public)?, serde_json::json!({}))
+                }
+                _ => return Err("Unknown v3 pool proof.".into()),
+            };
+            println!("{}", serde_json::json!({"proof": STANDARD.encode(proof), "settlement": extra}));
         }
         [command, source, output] if command == "uncompress" => {
             let file = std::fs::File::open(source)?;

@@ -28,7 +28,23 @@ struct Position {
     commitment: Hash,
     context: Hash,
     owner_tag: Hash,
+    #[cfg(feature = "keeper-pool")]
+    envelopes: [Vec<u8>; 2],
 }
+
+#[cfg(feature = "keeper-pool")]
+#[near(serializers = [json, borsh])]
+#[derive(Clone)]
+pub struct PoolKeeper {
+    account: AccountId,
+    encryption_key: Base64VecU8,
+    acknowledgment_key: Base64VecU8,
+}
+
+#[cfg(feature = "keeper-pool")]
+const ENVELOPE_BYTES: usize = 113; // 44 SPKI + 12 IV + 16 tag + 41 plaintext
+#[cfg(feature = "keeper-pool")]
+const LIVE_MARK_MAX_AGE: u64 = 90;
 
 #[near(serializers = [borsh])]
 struct Exit {
@@ -45,6 +61,16 @@ pub struct ShieldedPool {
     domain: Hash,
     spend_vk: Vec<u8>,
     close_vk: Vec<u8>,
+    #[cfg(feature = "keeper-pool")]
+    liquidation_vk: Vec<u8>,
+    #[cfg(feature = "keeper-pool")]
+    keepers: [PoolKeeper; 2],
+    #[cfg(feature = "keeper-pool")]
+    live_oracle: bool,
+    #[cfg(feature = "keeper-pool")]
+    mark_time: u64,
+    #[cfg(feature = "keeper-pool")]
+    liquidation_credits: near_sdk::store::LookupMap<Hash, u64>,
     leaves: Vec<Hash>,
     #[cfg(feature = "judge-pool")]
     tree: Vec<Hash>,
@@ -107,6 +133,7 @@ fn emit(event: &str, data: serde_json::Value) {
 
 #[near]
 impl ShieldedPool {
+    #[cfg(not(feature = "keeper-pool"))]
     #[init]
     #[private]
     pub fn init(
@@ -116,10 +143,65 @@ impl ShieldedPool {
         spend_vk: Base64VecU8,
         close_vk: Base64VecU8,
     ) -> Self {
+        Self::initialize(token, maker, oracle, spend_vk, close_vk)
+    }
+
+    #[cfg(feature = "keeper-pool")]
+    #[init]
+    #[private]
+    pub fn init(
+        token: AccountId,
+        maker: AccountId,
+        oracle: AccountId,
+        spend_vk: Base64VecU8,
+        close_vk: Base64VecU8,
+        liquidation_vk: Base64VecU8,
+        keepers: [PoolKeeper; 2],
+        live_oracle: bool,
+    ) -> Self {
+        Self::initialize(
+            token,
+            maker,
+            oracle,
+            spend_vk,
+            close_vk,
+            liquidation_vk,
+            keepers,
+            live_oracle,
+        )
+    }
+
+    fn initialize(
+        token: AccountId,
+        maker: AccountId,
+        oracle: AccountId,
+        spend_vk: Base64VecU8,
+        close_vk: Base64VecU8,
+        #[cfg(feature = "keeper-pool")] liquidation_vk: Base64VecU8,
+        #[cfg(feature = "keeper-pool")] keepers: [PoolKeeper; 2],
+        #[cfg(feature = "keeper-pool")] live_oracle: bool,
+    ) -> Self {
         require!(
             validate_vk(&spend_vk.0, SPEND_INPUTS) && validate_vk(&close_vk.0, CLOSE_INPUTS),
             "ERR_KEY"
         );
+        #[cfg(feature = "keeper-pool")]
+        {
+            require!(
+                validate_vk(&liquidation_vk.0, CLOSE_INPUTS),
+                "ERR_LIQUIDATION_KEY"
+            );
+            require!(
+                keepers[0].account != keepers[1].account
+                    && keepers[0].encryption_key.0 != keepers[1].encryption_key.0
+                    && keepers[0].acknowledgment_key.0 != keepers[1].acknowledgment_key.0
+                    && keepers
+                        .iter()
+                        .all(|k| k.encryption_key.0.len() == 44
+                            && k.acknowledgment_key.0.len() == 32),
+                "ERR_KEEPER_CONFIG"
+            );
+        }
         let current = env::current_account_id();
         let domain = digest(&[
             b"QM:pool-domain:2:",
@@ -136,6 +218,16 @@ impl ShieldedPool {
             domain,
             spend_vk: spend_vk.0,
             close_vk: close_vk.0,
+            #[cfg(feature = "keeper-pool")]
+            liquidation_vk: liquidation_vk.0,
+            #[cfg(feature = "keeper-pool")]
+            keepers,
+            #[cfg(feature = "keeper-pool")]
+            live_oracle,
+            #[cfg(feature = "keeper-pool")]
+            mark_time: 0,
+            #[cfg(feature = "keeper-pool")]
+            liquidation_credits: near_sdk::store::LookupMap::new(b"l"),
             leaves: vec![],
             #[cfg(feature = "judge-pool")]
             tree: Self::empty_tree(),
@@ -205,6 +297,30 @@ impl ShieldedPool {
     }
 
     pub fn publish_mark(&mut self, price_ticks: u16) {
+        #[cfg(feature = "keeper-pool")]
+        require!(!self.live_oracle, "ERR_LIVE_ORACLE_REQUIRED");
+        self.set_mark(price_ticks);
+    }
+
+    #[cfg(feature = "keeper-pool")]
+    pub fn publish_live_mark(&mut self, price_ticks: u16, observed_at: u64) {
+        let now = env::block_timestamp_ms() / 1000;
+        require!(
+            self.live_oracle
+                && observed_at > self.mark_time
+                && observed_at <= now
+                && now - observed_at <= 30,
+            "ERR_ORACLE_TIME"
+        );
+        self.set_mark(price_ticks);
+        self.mark_time = observed_at;
+        emit(
+            "mark_published",
+            json!({"round": self.round, "price_ticks": price_ticks, "observed_at": observed_at}),
+        );
+    }
+
+    fn set_mark(&mut self, price_ticks: u16) {
         require!(
             env::predecessor_account_id() == self.oracle && (1..=20_000).contains(&price_ticks),
             "ERR_ORACLE"
@@ -213,6 +329,7 @@ impl ShieldedPool {
         self.round = self.round.checked_add(1).expect("round overflow");
     }
 
+    #[cfg(not(feature = "keeper-pool"))]
     pub fn open_private(
         &mut self,
         root: Base64VecU8,
@@ -224,6 +341,87 @@ impl ShieldedPool {
         entry_ticks: u16,
         proof: Base64VecU8,
     ) {
+        self.open_position(
+            root,
+            nullifiers,
+            commitment,
+            context,
+            owner_tag,
+            change,
+            entry_ticks,
+            proof,
+        );
+    }
+
+    #[cfg(feature = "keeper-pool")]
+    pub fn open_private(
+        &mut self,
+        root: Base64VecU8,
+        nullifiers: [Base64VecU8; 2],
+        commitment: Base64VecU8,
+        context: Base64VecU8,
+        owner_tag: Base64VecU8,
+        change: Base64VecU8,
+        entry_ticks: u16,
+        proof: Base64VecU8,
+        envelopes: [Base64VecU8; 2],
+        acknowledgments: [Base64VecU8; 2],
+    ) {
+        for (index, keeper) in self.keepers.iter().enumerate() {
+            let envelope = &envelopes[index].0;
+            require!(envelope.len() == ENVELOPE_BYTES, "ERR_KEEPER_ENVELOPE");
+            let signature = acknowledgments[index]
+                .0
+                .as_slice()
+                .try_into()
+                .unwrap_or_else(|_| env::panic_str("ERR_KEEPER_ACK"));
+            let message = digest(&[
+                b"QM:keeper-ack:1:",
+                &self.domain,
+                &[index as u8],
+                &commitment.0,
+                &context.0,
+                &owner_tag.0,
+                &env::sha256_array(envelope),
+            ]);
+            let key = keeper
+                .acknowledgment_key
+                .0
+                .as_slice()
+                .try_into()
+                .expect("validated keeper key");
+            require!(
+                env::ed25519_verify(&signature, &message, &key),
+                "ERR_KEEPER_ACK"
+            );
+        }
+        self.open_position(
+            root,
+            nullifiers,
+            commitment,
+            context,
+            owner_tag,
+            change,
+            entry_ticks,
+            proof,
+            envelopes.map(|e| e.0),
+        );
+    }
+
+    fn open_position(
+        &mut self,
+        root: Base64VecU8,
+        nullifiers: [Base64VecU8; 2],
+        commitment: Base64VecU8,
+        context: Base64VecU8,
+        owner_tag: Base64VecU8,
+        change: Base64VecU8,
+        entry_ticks: u16,
+        proof: Base64VecU8,
+        #[cfg(feature = "keeper-pool")] envelopes: [Vec<u8>; 2],
+    ) {
+        #[cfg(feature = "keeper-pool")]
+        self.require_fresh_mark();
         let (position, context, tag, change) = (
             parse(commitment),
             parse(context),
@@ -242,6 +440,11 @@ impl ShieldedPool {
             self.available_slots() >= 1 + usize::from(change != ZERO),
             "ERR_POOL_CAPACITY"
         );
+        #[cfg(feature = "keeper-pool")]
+        require!(
+            !self.liquidation_credits.contains_key(&position),
+            "ERR_POSITION"
+        );
         self.check_spend(
             parse(root),
             nullifiers.map(parse),
@@ -258,6 +461,8 @@ impl ShieldedPool {
             commitment: position,
             context,
             owner_tag: tag,
+            #[cfg(feature = "keeper-pool")]
+            envelopes,
         });
         self.append(change);
         emit(
@@ -274,6 +479,37 @@ impl ShieldedPool {
         maker_credit: U128,
         proof: Base64VecU8,
     ) {
+        self.settle(commitment, round, payout, maker_credit, proof, false);
+    }
+
+    #[cfg(feature = "keeper-pool")]
+    pub fn liquidate_private(
+        &mut self,
+        commitment: Base64VecU8,
+        round: u64,
+        payout: Base64VecU8,
+        maker_credit: U128,
+        proof: Base64VecU8,
+    ) {
+        let caller = env::predecessor_account_id();
+        require!(
+            self.keepers.iter().any(|k| k.account == caller),
+            "ERR_KEEPER"
+        );
+        self.settle(commitment, round, payout, maker_credit, proof, true);
+    }
+
+    fn settle(
+        &mut self,
+        commitment: Base64VecU8,
+        round: u64,
+        payout: Base64VecU8,
+        maker_credit: U128,
+        proof: Base64VecU8,
+        liquidation: bool,
+    ) {
+        #[cfg(feature = "keeper-pool")]
+        self.require_fresh_mark();
         let commitment = parse(commitment);
         let payout = parse(payout);
         let credit = u64::try_from(maker_credit.0).expect("credit overflow");
@@ -289,18 +525,30 @@ impl ShieldedPool {
             &[commitment, pos.context, self.domain, pos.owner_tag, payout],
             &[u64::from(self.price), round, credit],
         );
-        require!(
-            verify(&self.close_vk, &proof.0, &inputs),
-            "ERR_PROOF_INVALID"
-        );
+        let key = &self.close_vk;
+        #[cfg(feature = "keeper-pool")]
+        let key = if liquidation {
+            &self.liquidation_vk
+        } else {
+            key
+        };
+        require!(verify(key, &proof.0, &inputs), "ERR_PROOF_INVALID");
         self.maker_available = self
             .maker_available
             .checked_add(credit)
             .expect("maker overflow");
         self.positions.swap_remove(index);
+        #[cfg(feature = "keeper-pool")]
+        if liquidation {
+            self.liquidation_credits.insert(commitment, credit);
+        }
         self.append(payout);
         emit(
-            "position_closed",
+            if liquidation {
+                "position_liquidated"
+            } else {
+                "position_closed"
+            },
             json!({"commitment": b64(commitment), "payout_note": b64(payout), "round": round, "maker_credit": maker_credit}),
         );
     }
@@ -374,9 +622,36 @@ impl ShieldedPool {
         }
     }
 
+    #[cfg(feature = "keeper-pool")]
+    pub fn get_liquidation_credit(&self, commitment: Base64VecU8) -> Option<U128> {
+        self.liquidation_credits
+            .get(&parse(commitment))
+            .map(|&credit| U128(u128::from(credit)))
+    }
+
+    #[cfg(feature = "keeper-pool")]
+    pub fn get_keeper_config(&self) -> serde_json::Value {
+        json!({"keepers": self.keepers, "liquidation_vk_sha256": b64(env::sha256_array(&self.liquidation_vk)),
+            "live_oracle": self.live_oracle, "observed_at": self.mark_time})
+    }
+
+    #[cfg(feature = "keeper-pool")]
+    pub fn get_keeper_position(&self, commitment: Base64VecU8) -> Option<serde_json::Value> {
+        let commitment = parse(commitment);
+        self.positions
+            .iter()
+            .find(|pos| pos.commitment == commitment)
+            .map(|pos| {
+                json!({
+                    "context": b64(pos.context), "owner_tag": b64(pos.owner_tag),
+                    "envelopes": pos.envelopes.each_ref().map(|e| Base64VecU8(e.clone())),
+                })
+            })
+    }
+
     pub fn get_pool(&self) -> serde_json::Value {
         json!({
-            "proof_version": if cfg!(feature = "judge-pool") { "poseidon-v2" } else if cfg!(feature = "browser-pool") { "poseidon-v1" } else { "sha256-v2" },
+            "proof_version": if cfg!(feature = "keeper-pool") { "poseidon-v3" } else if cfg!(feature = "judge-pool") { "poseidon-v2" } else if cfg!(feature = "browser-pool") { "poseidon-v1" } else { "sha256-v2" },
             "capacity": LEAVES,
             "domain": b64(self.domain), "token": self.token, "root": b64(self.root()),
             "leaves": self.leaves.iter().copied().map(b64).collect::<Vec<_>>(),
@@ -391,6 +666,16 @@ impl ShieldedPool {
 }
 
 impl ShieldedPool {
+    #[cfg(feature = "keeper-pool")]
+    fn require_fresh_mark(&self) {
+        let now = env::block_timestamp_ms() / 1000;
+        require!(
+            !self.live_oracle
+                || (self.mark_time != 0 && now.saturating_sub(self.mark_time) <= LIVE_MARK_MAX_AGE),
+            "ERR_STALE_MARK"
+        );
+    }
+
     fn available_slots(&self) -> usize {
         LEAVES
             - self.leaves.len()
