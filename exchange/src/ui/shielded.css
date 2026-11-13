@@ -5,6 +5,9 @@
 .sp-title p { margin-top: 7px; }
 .sp-main .sp-status { margin: 18px 0; padding: 11px 14px; min-height: 44px; overflow-wrap: anywhere; border: 1px solid var(--line); border-radius: 8px; }
 .sp-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 16px; }
+.sp-chart { margin-bottom: 16px; }
+.sp-chart-head { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
+.sp-chart .xc-chart-host { min-height: 100px; background: var(--well); border-radius: 8px; }
 .sp-panel { min-width: 0; display: grid; gap: 16px; padding: 22px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
 .sp-panel h2 { font-size: 17px; }
 .sp-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
@@ -13,6 +16,7 @@
 .sp-stats strong { font-size: clamp(18px, 3.3vw, 28px); font-weight: 650; }
 .sp-panel form, .sp-panel label { display: grid; gap: 8px; }
 .sp-panel form { gap: 11px; }
+.sp-order-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .sp-input { width: 100%; border: 1px solid var(--field-line); border-radius: 7px; background: var(--well); padding: 9px 11px; }
 .sp-panel summary { color: var(--muted); cursor: pointer; }
 .sp-panel details > :not(summary), #sp-close { margin-top: 11px; }
