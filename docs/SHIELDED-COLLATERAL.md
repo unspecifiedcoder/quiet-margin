@@ -4,9 +4,57 @@ Open **Shielded Pool** in Quiet Margin. Connect a NEAR testnet wallet, then sign
 the NEP-413 unlock message. The same wallet key and app origin derive the same
 private trading key. The signature stays in the browser.
 
-## Browser-only build
+## Current judge pool: browser-only longs and shorts
 
-The default `/shielded` route uses `browser-pool.qm-treasury-a280bef3.testnet`.
+The default `/shielded` route uses `judge-pool.qm-treasury-a280bef3.testnet`.
+Connect a NEAR testnet wallet, unlock the private wallet by signing, then claim
+test funds if the host offers them. The faucet sends 100 mUSDC to the public
+wallet and limited test NEAR for fees. The claim is capped per public account
+and by the host's total allocation. Deposit 60 and 40 mUSDC, then select
+**Open private long** or **Open private short** with 30 mUSDC of isolated margin
+and a size of 0.001 BTC. The 70 mUSDC of change stays available in the pool.
+The browser proves and signs the open, close, and withdrawal; no desktop
+helper or proving service receives the witness. The pool supports 64 append
+slots and positions reserve space for their eventual close.
+
+The BTC/USDT candles show live spot reference data. The testnet oracle posts
+a separate settlement mark, which drives fills and P&L. The maker vault is
+the counterparty. Leverage is capped at 3×. The pool has no order book, funding
+rates, or keeper liquidation. The separate original market demonstrates
+keeper liquidation.
+
+[Watch the browser short and explorer walkthrough](media/quiet-margin-shielded-short.mp4).
+The testnet short opened at $68,800 and closed at $67,800, earning 1 mUSDC.
+The final withdrawal returned 101 mUSDC to the connected wallet. The public
+open includes the entry mark and private signer. The direction, exact size,
+margin, and connected funding address are absent from its arguments.
+Public settlement accounting exposes net P&L and can reveal information
+about a position after close. Deposits, withdrawals, and sponsor funding
+can also correlate activity; the faucet operator sees both wallet identifiers.
+
+| Action | Public testnet receipt |
+| --- | --- |
+| Deposit 60 mUSDC | [Deposit](https://testnet.near.rocks/tx/ALwYvPRn5oRMKQAyAzS6wMV7WT5KtGLdXaVtoUoTTBHV) |
+| Deposit 40 mUSDC | [Deposit](https://testnet.near.rocks/tx/HmpDZRXUV9TZApDucq18rKgdYA9KB7LNP25T6yzwofqk) |
+| Open short | [Transaction](https://testnet.near.rocks/tx/HTpzEYhQFzSeGY9rUfUvE419ygDTcoWgmb7tK5URKxQE) · [Block 277523983](https://testnet.near.rocks/block/277523983) |
+| Publish $67,800 | [Mark update](https://testnet.near.rocks/tx/48v61UtHPLALjxjTZTgTRn2mfSQVVyWmf2AQsvi36Xzt) |
+| Close short | [Close](https://testnet.near.rocks/tx/8UeYCJGEbemYmiQTusdHZoqHJmzBPqDJbGkFG8LbnEoM) |
+| Withdraw 101 mUSDC | [Withdrawal](https://testnet.near.rocks/tx/76btUP7Lt7e1DEu3haEcNoRAf44dnp4da2AA1jQEyEn3) |
+
+Independently check the receipts with `node scripts/verify-shielded-receipts.mjs --judge`.
+To serve the interface locally, install the root and exchange Node dependencies,
+build with `npm run build --prefix exchange`, and run
+`node exchange/server/judge-server.mjs` (default: `http://127.0.0.1:8798`).
+The market feed works without funding credentials. An operator enabling the
+optional faucet sets `QUIET_POOL_SPONSOR_ID`, `QUIET_POOL_SPONSOR_KEY`,
+`QUIET_POOL_FUNDING_DIR` (persistent disk), and `QUIET_POOL_FUNDING_QUOTA`
+to match the sponsor's testnet budget. Public hosting also sets
+`QUIET_POOL_ORIGIN` to the canonical HTTPS origin. Treat that origin as
+persistent: changing it derives a different private key.
+
+## Earlier long-only browser build
+
+The earlier `/shielded?pool=browser` route uses `browser-pool.qm-treasury-a280bef3.testnet`.
 The app serves its public proving keys and Wasm from static assets. The browser
 proves opens, closes, and withdrawals and submits signed transactions directly
 to NEAR testnet. The spend key is 3.50 MB and the close key is 1.15 MB. The

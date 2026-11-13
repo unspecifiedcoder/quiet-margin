@@ -1,0 +1,30 @@
+{
+  "wallet": "quiet-margin-demo-41d71371.testnet",
+  "pool": "judge-pool.qm-treasury-a280bef3.testnet",
+  "token": "musdc.qm-treasury-a280bef3.testnet",
+  "deposits": [
+    {
+      "hash": "ALwYvPRn5oRMKQAyAzS6wMV7WT5KtGLdXaVtoUoTTBHV",
+      "cents": "6000"
+    },
+    {
+      "hash": "HmpDZRXUV9TZApDucq18rKgdYA9KB7LNP25T6yzwofqk",
+      "cents": "4000"
+    }
+  ],
+  "lifecycle": {
+    "trader": "474901a366a1982585d4c8d34061e3f17a26b26c96ed63c35cbed2073a8bd2ce",
+    "open": "HTpzEYhQFzSeGY9rUfUvE419ygDTcoWgmb7tK5URKxQE",
+    "close": "8UeYCJGEbemYmiQTusdHZoqHJmzBPqDJbGkFG8LbnEoM",
+    "withdrawal": "76btUP7Lt7e1DEu3haEcNoRAf44dnp4da2AA1jQEyEn3",
+    "block": "6dhFEPokGPfwFCaVDqz7e3jjhJeeE4RbtKhTUh4UwtHt",
+    "height": 277523983,
+    "withdrawalCents": "10100"
+  },
+  "mark": {
+    "hash": "48v61UtHPLALjxjTZTgTRn2mfSQVVyWmf2AQsvi36Xzt",
+    "signer": "oracle.qm-treasury-a280bef3.testnet",
+    "priceTicks": 6780,
+    "round": 2
+  }
+}
