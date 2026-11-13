@@ -13,3 +13,4 @@
 /exchange/public/prover/xythum_prover_bg.wasm
 /exchange/public/prover/*.d.ts
 /exchange/public/prover/snippets/
+/exchange/public/shielded/
