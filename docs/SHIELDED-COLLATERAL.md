@@ -6,6 +6,8 @@ private trading key. The signature stays in the browser.
 
 ## Verified testnet trade
 
+[Watch the full clicking demo](media/quiet-margin-shielded-pool.mp4).
+
 The connected wallet signed 60 and 40 mUSDC deposits. The private trader
 opened a 0.001 BTC long with 30 mUSDC margin and 70 mUSDC in shielded change.
 Closing at the same mark returned the original 30 as a new note. A withdrawal

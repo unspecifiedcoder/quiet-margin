@@ -12,6 +12,12 @@ is offline.
 
 ## First look
 
+[Watch the Shielded Pool testnet demo](docs/media/quiet-margin-shielded-pool.mp4).
+It shows two connected-wallet deposits, a 30 mUSDC private long with 70 mUSDC
+in shielded change, close, and withdrawal. The transaction and block explorer
+show what an observer can inspect. The recorded setup uses the local desktop
+prover. [Shielded Pool receipts and privacy limits](docs/SHIELDED-COLLATERAL.md)
+
 [Watch the Quiet Margin connected wallet demo](docs/media/quiet-margin-connected-trade.mp4).
 It shows a real NEAR wallet approval, private wallet recovery, capped test
 funding, a live BTC chart, and a full open, close and withdrawal. The split
