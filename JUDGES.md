@@ -1,38 +1,10 @@
 # Quiet Margin judge guide
 
-Quiet Margin is a native NEAR clearing contract for a confidential
-BTC/mock-USDC long position. The open transaction carries no plaintext exact
-size, entry, or margin. Staging stores encrypted openings for the keepers.
-The [privacy limits](#5-threat-model-and-limits) cover what the maker, keepers,
-and public observers can learn. Groth16 proofs, checked on chain through the NEP-488
-BLS12-381 host functions, gate opening, voluntary close, and keeper
-liquidation. Either of two keepers can liquidate alone from an encrypted
-copy of the opening stored on chain, so liquidation works while the trader
-is offline.
+Start with the [README walkthrough](README.md#start-here), the [2:41 demo](docs/media/quiet-margin-judge-demo.mp4), and the [16 NEAR testnet transactions and blocks](docs/QUIET-MARGIN-DEMO.md). The recording follows a live-mark short through deposit, private open, close, and withdrawal. A separate pool with a controlled mark demonstrates healthy rejection and Keeper B liquidation on both sides.
 
-## First look
+Run `node scripts/verify-judge-demo.mjs` from the root with Node.js 22+ and internet access. It checks the recorded transactions without wallet credentials. For the app, use the [Shielded Pool operator guide](docs/SHIELDED-COLLATERAL.md#shielded-pool-with-offline-liquidation).
 
-Start in **Shielded Pool** for browser-proved BTC longs and shorts with
-isolated margin. The current testnet run deposited 60 and 40 mUSDC, opened a
-short with 30 mUSDC of margin and 70 mUSDC in shielded change, closed for a
-1 mUSDC gain, and withdrew 101 mUSDC. [Current setup and receipts](docs/SHIELDED-COLLATERAL.md#current-judge-pool-browser-only-longs-and-shorts).
-The BTC/USDT chart is live; a separate controlled NEAR mark settles the trade.
-[Watch the current short trade with wallet approvals and public explorers](docs/media/quiet-margin-shielded-short.mp4).
-The newer [shielded keeper pool](docs/SHIELDED-COLLATERAL.md#shielded-pool-with-offline-liquidation) has testnet evidence for backup keeper liquidations on both sides, plus a separate live-mark deployment.
-
-[Watch the earlier Shielded Pool testnet demo](docs/media/quiet-margin-shielded-pool.mp4).
-It shows two connected-wallet deposits, a 30 mUSDC private long with 70 mUSDC
-in shielded change, close, and withdrawal. The transaction and block explorer
-show what an observer can inspect. The recorded setup uses the local desktop
-prover. [Shielded Pool receipts and privacy limits](docs/SHIELDED-COLLATERAL.md)
-
-[Watch the Quiet Margin connected wallet demo](docs/media/quiet-margin-connected-trade.mp4).
-It shows a real NEAR wallet approval, private wallet recovery, capped test
-funding, a live BTC chart, and a full open, close and withdrawal. The split
-view shows the terminal and public explorer for the same trade.
-[Connected trade receipts](docs/CONNECTED-TRADE.md) link directly to the
-transactions and block. The [original recording](docs/media/quiet-margin-demo.mp4)
-is still available.
+The rest of this guide documents the original funded-market run and its supporting replay. It uses a different market design and different receipts from the current Shielded Pool.
 
 ### Public testnet explorer
 
