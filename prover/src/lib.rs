@@ -14,5 +14,6 @@ pub mod api;
 pub mod browser;
 pub mod circuit;
 pub mod cli;
+pub mod collateral;
 pub mod encoding;
 pub mod model;

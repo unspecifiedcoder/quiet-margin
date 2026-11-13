@@ -70,3 +70,19 @@ recorded receipts establish its fixed-escrow behavior.
 
 [NEP-141](https://github.com/near/NEPs/blob/master/neps/nep-0141.md) ·
 [Funded market specification](FUNDED-MARKET.md)
+
+## Implemented on the experimental branch
+
+`prover/src/collateral.rs` implements a two-note R1CS spend. It checks both
+private note paths against one public root, derives two distinct nullifiers,
+binds the private margin to the same position commitment format as the current
+market, and conserves value into that margin and a private change note. The
+test fixture uses 60 + 40 → 30 + 70; it also tries an inflated change note,
+a duplicate input, a false Merkle path, and a substituted position commitment.
+
+Run `cargo test --manifest-path prover/Cargo.toml --release --test collateral`.
+This circuit has no custody or NEAR integration. Its shallow test tree, root
+and nullifier checks in contract state, binding a deposit to token amount,
+note discovery, and the final settlement and exit paths must be addressed
+before the pool can accept deposits. This branch does not change the live
+testnet market or its fixed escrow.
