@@ -312,6 +312,29 @@ export async function mountShieldedPool(root) {
       return 'Pool notes restored.';
     }));
   };
+  let refreshing = false;
+  const ticker = setInterval(async () => {
+    if (!root.isConnected || el('connect') !== connect) {
+      clearInterval(ticker);
+      return;
+    }
+    if (working || refreshing || !client?.keeperConfig) return;
+    const current = client;
+    refreshing = true;
+    try {
+      const next = await current.read();
+      if (current === client && !working) {
+        data = next;
+        show();
+        lock();
+      }
+    } catch {
+      // Retain the last confirmed view until the next successful read.
+    } finally {
+      refreshing = false;
+    }
+  }, 4_000);
+
   await run('Loading pool…', async () => {
     const selected = new URLSearchParams(location.search).get('pool');
     const original = selected === 'legacy';
