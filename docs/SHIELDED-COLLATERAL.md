@@ -81,5 +81,14 @@ reserve, and give the demo wallet up to 100 mUSDC on initial setup.
    Reload and unlock from the same origin. The operator funds the signer
    separately from the public collateral wallet.
 
+For an existing deployment with compressed proving keys, export both keys to
+a separate directory with `quiet-pool-prover uncompress SOURCE OUTPUT`. Use
+`spend.pk` and `close.pk` as the output names and set `XYTHUM_POOL_PROVING_DIR`
+to that directory before starting the exchange server. The verifying key
+fingerprints and deployed contract stay the same. The uncompressed spend key
+is about 862 MB and the close key about 183 MB. These files are generated
+locally and are outside Git. Use a desktop browser with enough free memory
+to load the key and construct the proof.
+
 [NEP-141](https://github.com/near/NEPs/blob/master/neps/nep-0141.md) ·
 [Original market and keeper](FUNDED-MARKET.md)

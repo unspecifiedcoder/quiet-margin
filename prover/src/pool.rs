@@ -398,6 +398,16 @@ pub fn prove_json<S: crate::browser::KeySource + ?Sized>(
     fingerprint: &str,
     input: &str,
 ) -> Result<String, String> {
+    prove_json_with_progress(kind, key, fingerprint, input, || {})
+}
+
+pub(crate) fn prove_json_with_progress<S: crate::browser::KeySource + ?Sized>(
+    kind: &str,
+    key: &S,
+    fingerprint: &str,
+    input: &str,
+    key_loaded: impl FnOnce(),
+) -> Result<String, String> {
     use base64::{Engine, engine::general_purpose::STANDARD};
     if input.len() > 20_000 {
         return Err("Pool proof input is too large.".into());
@@ -408,6 +418,7 @@ pub fn prove_json<S: crate::browser::KeySource + ?Sized>(
         _ => return Err("Unknown pool proof.".into()),
     };
     let key = crate::browser::load_key_for_inputs(key, count, kind, fingerprint)?;
+    key_loaded();
     let proof = if kind == "spend" {
         let witness: Spend = serde_json::from_str(input).map_err(|_| "Invalid spend input.")?;
         let public = witness.public();

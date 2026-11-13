@@ -626,12 +626,16 @@ mod wasm {
         pk_bytes: &JsValue,
         fingerprint: &str,
         input: &str,
+        key_loaded: &js_sys::Function,
     ) -> Result<String, JsError> {
-        js(crate::pool::prove_json(
+        js(crate::pool::prove_json_with_progress(
             kind,
             &bytes(pk_bytes)?,
             fingerprint,
             input,
+            || {
+                let _ = key_loaded.call0(&JsValue::UNDEFINED);
+            },
         ))
     }
 }

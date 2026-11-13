@@ -6,7 +6,7 @@ import './shielded.css';
 
 const money = (cents) => (cents / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const el = (id) => document.getElementById('sp-' + id);
-const explorer = 'https://testnet.nearblocks.io';
+const explorer = 'https://testnet.near.rocks';
 
 function localProof(kind, fingerprint, witness) {
   return new Promise((resolve, reject) => {
@@ -18,7 +18,7 @@ function localProof(kind, fingerprint, witness) {
       if (error) reject(error); else resolve(proof);
     }
     worker.onmessage = ({ data }) => {
-      if (data.stage) el('status').textContent = data.stage + ' · this can take a few minutes';
+      if (data.stage) el('status').textContent = data.stage + ' in your browser…';
       else if (data.proof) finish(null, data.proof);
       else finish(new Error(data.error));
     };
@@ -30,7 +30,7 @@ function localProof(kind, fingerprint, witness) {
 function receipt(list, label, hash) {
   const li = document.createElement('li');
   const a = document.createElement('a');
-  a.href = explorer + '/txns/' + encodeURIComponent(hash);
+  a.href = explorer + '/tx/' + encodeURIComponent(hash);
   a.target = '_blank';
   a.rel = 'noopener noreferrer';
   a.className = 'xc-link';
@@ -226,7 +226,7 @@ export async function mountShieldedPool(root) {
     const deployment = await response.json();
     if (![deployment.pool, deployment.token].every(isAccountId)) throw new Error('Invalid shielded pool deployment.');
     config = deployment;
-    el('contract').href = explorer + '/address/' + encodeURIComponent(config.pool);
+    el('contract').href = explorer + '/account/' + encodeURIComponent(config.pool);
     return 'Connect your NEAR testnet wallet to begin.';
   });
 }

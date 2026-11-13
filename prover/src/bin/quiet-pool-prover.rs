@@ -26,7 +26,7 @@ fn setup<C: ConstraintSynthesizer<Fr>>(
         .create_new(true)
         .open(dir.join(format!("{kind}.pk")))?;
     let mut writer = BufWriter::new(file);
-    pk.serialize_compressed(&mut writer)?;
+    pk.serialize_uncompressed(&mut writer)?;
     writer.flush()?;
     let raw = vk_bytes(&vk);
     fs::write(dir.join(format!("{kind}.vk")), &raw)?;

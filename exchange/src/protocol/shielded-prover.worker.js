@@ -8,9 +8,10 @@ self.onmessage = async ({ data: { kind, fingerprint, witness } }) => {
     ]);
     if (!response.ok) throw new Error('The pool proving key is unavailable.');
     const [, key] = await Promise.all([wasm.default(), response.arrayBuffer()]);
-    self.postMessage({ stage: 'Proving locally' });
-    const result = JSON.parse(wasm.prove_pool(kind, new Uint8Array(key), fingerprint, JSON.stringify(witness)));
-    self.postMessage({ proof: result.proof });
+    self.postMessage({ stage: 'Preparing proving key' });
+    const result = JSON.parse(wasm.prove_pool(kind, new Uint8Array(key), fingerprint, JSON.stringify(witness),
+      () => self.postMessage({ stage: 'Generating proof' })));
+    self.postMessage({ proof: result.proof, proveMs: result.proving_ms });
   } catch (error) {
     self.postMessage({ error: String(error.message || 'The browser could not generate a proof.').slice(0, 200) });
   }
