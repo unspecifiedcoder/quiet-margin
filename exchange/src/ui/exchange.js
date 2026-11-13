@@ -95,13 +95,15 @@ export function mountExchange(root, handlers = {}, options = {}) {
   r.sessionId = h('span', { class: 'xc-who__id' });
   r.custody = h('span', { class: 'xc-who__key' });
   r.who = h('div', { class: 'xc-who' }, r.sessionId, r.custody);
+  r.positionExplorer = h('a', { class: 'xc-link', href: '/positions', text: 'Position Explorer' });
   const top = h('header', { class: 'xc-top' },
     h('div', { class: 'xc-brand' },
       h('span', { class: 'xc-brand__mark', 'aria-hidden': 'true' }),
       h('span', { class: 'xc-brand__name', text: 'Quiet Margin' })),
     h('div', { class: 'xc-top__ctx' },
       r.network,
-      h('span', { class: 'xc-tag', title: `${COLLATERAL} is a mock token on a test network with no cash value.` }, h('strong', { text: COLLATERAL }), ' mock collateral')),
+      h('span', { class: 'xc-tag', title: `${COLLATERAL} is a mock token on a test network with no cash value.` }, h('strong', { text: COLLATERAL }), ' mock collateral'),
+      r.positionExplorer),
     r.who);
 
   // ---------- market strip ----------
@@ -917,13 +919,17 @@ export function mountExchange(root, handlers = {}, options = {}) {
     const host = r.tabPanels.receipts;
     const list = state.receipts;
     setText(r.counts.receipts, list.length ? String(list.length) : '');
+    const traderId = state.network === 'testnet' ? state.session?.traderId : null;
     const items = list.map((rc) => JSON.stringify([rc.label, rc.hash, rc.explorerUrl]));
-    const key = JSON.stringify(items);
+    const key = JSON.stringify([traderId, items]);
     if (key === keys.receipts) return;
     const receiptItem = (rc) => h('li', { class: 'xc-receipt' },
       h('span', { class: 'xc-receipt__label', text: rc.label ?? 'Transaction' }),
       rc.hash ? hashValue(rc.hash, `${rc.label ?? 'transaction'} hash`) : h('span', { class: 'xc-muted', text: '—' }),
-      explorerLink(rc));
+      explorerLink(rc),
+      traderId && rc.hash && rc.label?.toLowerCase() === 'open'
+        ? h('a', { class: 'xc-link xc-receipt__inspect',
+          href: '/positions?' + new URLSearchParams({ open: rc.hash, trader: traderId }), text: 'Inspect position' }) : null);
     if (host.contains(document.activeElement) && document.activeElement !== host) {
       // A Copy / Explorer control has focus. New receipts are appended to the
       // log, so add them at the top of the newest-first list without touching
@@ -1014,6 +1020,8 @@ export function mountExchange(root, handlers = {}, options = {}) {
     setText(r.netText, net === 'testnet' ? 'NEAR testnet' : net === 'sandbox' ? 'NEAR sandbox' : 'NEAR testnet · not connected');
     r.network.className = `xc-tag xc-net ${net ? `is-${net}` : 'is-off'}`;
     const s = state.session;
+    const marketExplorerHref = s?.marketId && net === 'testnet' ? '/positions?market=' + encodeURIComponent(s.marketId) : '/positions';
+    if (r.positionExplorer.getAttribute('href') !== marketExplorerHref) r.positionExplorer.href = marketExplorerHref;
     r.who.hidden = !s;
     if (s) {
       setText(r.sessionId, s.traderId ?? 'session');

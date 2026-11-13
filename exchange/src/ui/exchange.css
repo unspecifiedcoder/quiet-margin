@@ -81,6 +81,37 @@ html, body { margin: 0; background: #101721; }
 .xc-spot-down { fill: #f290a5; stroke: #f290a5; }
 .xc-spot-last { stroke: var(--act); stroke-dasharray: 4 4; }
 .xc-spot-status { margin: 16px; }
+.pe-top > a { margin-left: auto; }
+.pe-main { width: min(100% - 32px, 820px); margin: 40px auto 56px; }
+.pe-main h1 { font-size: 30px; line-height: 1.2; letter-spacing: -0.02em; }
+.pe-main .pe-intro { margin: 8px 0 24px; }
+.pe-form, .pe-field { display: grid; gap: 8px; }
+.pe-form { gap: 14px; }
+.pe-fields { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 12px; }
+.pe-fields > :only-child { grid-column: 1 / -1; }
+.pe-form > .pe-field, .pe-form > button { justify-self: start; }
+.pe-field { min-width: 0; }
+.pe-input {
+  min-width: 0; width: 100%; min-height: 42px; padding: 8px 10px;
+  color: var(--ink); background: var(--well); border: 1px solid var(--field-line);
+  border-radius: 6px; font: inherit;
+}
+.pe-optional > summary { cursor: pointer; padding: 6px 0; }
+.pe-optional[open] > summary { margin-bottom: 8px; }
+.pe-examples { display: flex; flex-wrap: wrap; gap: 8px 20px; margin: 18px 0 12px; }
+.pe-main .pe-status { min-height: 1.5em; margin-bottom: 12px; }
+.pe-card { padding: 20px; }
+.pe-card h2 { font-size: 20px; margin-bottom: 10px; }
+.pe-card .pe-subtitle { font-size: 16px; margin-top: 20px; }
+.pe-row { display: grid; grid-template-columns: 158px minmax(0, 1fr); gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--line); }
+.pe-row dt { color: var(--muted); }
+.pe-row dd { overflow-wrap: anywhere; }
+.pe-main .pe-note { margin-top: 14px; max-width: 72ch; }
+@media (max-width: 600px) {
+  .pe-main { margin-top: 24px; }
+  .pe-fields, .pe-row { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+  .pe-card { padding: 14px; }
+}
 .xc-wallet-bar {
   display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px;
   padding: 10px clamp(12px, 2vw, 24px); border-bottom: 1px solid var(--line-2);
@@ -380,6 +411,7 @@ html, body { margin: 0; background: #101721; }
 }
 .xc-receipt:last-child { border-bottom: 0; }
 .xc-receipt__label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.xc-receipt__inspect { grid-column: 1 / -1; justify-self: start; }
 
 .xc-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .xc-table th { text-align: right; color: var(--muted); font-weight: 500; font-size: 12px; padding: 6px 8px; border-bottom: 1px solid var(--line); }

@@ -38,6 +38,13 @@ export const HOSTED_HEADERS = Object.freeze({
   'Cross-Origin-Opener-Policy': 'same-origin',
   'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=(), usb=()',
 });
+const POSITION_EXPLORER_HEADERS = Object.freeze({
+  ...HOSTED_HEADERS,
+  'Content-Security-Policy': HOSTED_CSP.replace(
+    "connect-src 'self' " + HOSTED_RPC_ORIGIN,
+    "connect-src 'self' " + HOSTED_RPC_ORIGIN + ' https://archival-rpc.testnet.fastnear.com',
+  ),
+});
 export const INVITE_HEADER = 'x-xythum-invite';
 const STATIC_TYPES = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
@@ -187,6 +194,7 @@ export function createApp({ coordinator, config, log = () => {} }) {
     let status = 500;
     try {
       const { pathname } = new URL(req.url, 'http://localhost');
+      if (config.hosted && /^\/positions\/?$/.test(pathname)) res.xythumHeaders = POSITION_EXPLORER_HEADERS;
       const key = req.method + ' ' + pathname;
       if (routes[key]) {
         route = key;

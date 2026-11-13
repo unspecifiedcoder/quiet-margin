@@ -52,6 +52,14 @@ one confidential long at a time per deployment. A separate public trading
 mode, where the position terms go directly into chain state, was outside
 this implementation.
 
+In the exchange, select **Position Explorer**. Use the recorded BTC long
+or a Keeper B example to read the commitment, mark and escrow directly
+from NEAR at the open receipt's execution block. The explorer checks the
+position identity on a supplied close or liquidation receipt and links the
+transaction and block. A market account lookup reads its latest finalized
+active slot. Historical lookup uses the transaction hash and its signer.
+[Xythum EVM contract comparison](docs/XYTHUM-CONTRACT-MAP.md).
+
 ### Read the contract in NearBlocks
 
 Open the [ABI-enabled market's Methods tab](https://testnet.nearblocks.io/address/market-abi.qm-treasury-a280bef3.testnet/contract/methods)

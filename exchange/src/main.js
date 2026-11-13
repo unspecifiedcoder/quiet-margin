@@ -6,8 +6,11 @@ const root = document.getElementById('app') ?? document.body;
 const allowSandbox = import.meta.env.VITE_ALLOW_SANDBOX === '1';
 const PRIVATE_WALLET_ROUTE = '?wallet=burner';
 
-const route = new URLSearchParams(globalThis.location.search).get('wallet');
-if (route === 'burner') {
+const params = new URLSearchParams(globalThis.location.search);
+const route = params.get('wallet');
+if (location.pathname === '/positions' || location.pathname === '/positions/') {
+  import('./ui/position-explorer.js').then(({ mountPositionExplorer }) => mountPositionExplorer(root, params));
+} else if (route === 'burner') {
   // Private wallet route: a built-in testnet burner unlocks a separate private
   // trading wallet. It never auto-unlocks; the user signs explicitly each load.
   startPrivateWallet();

@@ -164,6 +164,12 @@ test('hosted responses carry the CSP and framing headers; local responses do not
   assert.deepEqual(directives['script-src'], ["'self'", "'wasm-unsafe-eval'"]);
   assert.deepEqual(directives['worker-src'], ["'self'"]);
   assert.deepEqual(directives['connect-src'], ["'self'", 'https://test.rpc.fastnear.com']);
+  const explorer = await fetch(hosted.base + '/positions');
+  assert.equal(explorer.status, 200);
+  assert.equal(explorer.headers.get('content-security-policy'), HOSTED_CSP.replace(
+    "connect-src 'self' https://test.rpc.fastnear.com",
+    "connect-src 'self' https://test.rpc.fastnear.com https://archival-rpc.testnet.fastnear.com",
+  ));
   assert.deepEqual(directives['frame-ancestors'], ["'none'"]);
   assert.ok(!HOSTED_CSP.includes("'unsafe-eval'") && !HOSTED_CSP.includes("'unsafe-inline'"));
   const wasm = await fetch(hosted.base + '/prover/xythum_prover_bg.wasm');
