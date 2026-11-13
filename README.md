@@ -1,158 +1,68 @@
-# Quiet Margin — Private Perps on NEAR
+# Quiet Margin | Shielded BTC Perpetuals on NEAR
 
-Quiet Margin is a native NEAR testnet exchange for confidential
-BTC/mock-USDC long positions. Opens, voluntary closes, and keeper
-liquidations are gated by Groth16 proofs checked on chain through the NEP-488
-BLS12-381 host functions. A keeper can liquidate an eligible position while
-the trader is offline.
+Trading on a public ledger can expose position size, direction, and margin before a trade settles. Quiet Margin lets a trader open a BTC long or short with shielded test collateral on NEAR. A backup keeper can liquidate an under-margined position while the trader is offline.
 
-## Judge path
+The browser generates Groth16 proofs for trader actions. The NEAR contract verifies proofs with the NEP-488 BLS12-381 host functions, applies the on-chain mark, and settles balances. The testnet build uses mock USDC (mUSDC).
 
-Start with the [judge guide](JUDGES.md) for the demo video, public explorer links, and commands to verify the result.
+## Start here
 
-The [Shielded Pool](docs/SHIELDED-COLLATERAL.md) adds a shared testnet market at `/shielded`. The connected NEAR wallet deposits mock USDC, and a separate private trading key can spend part of that balance as margin.
+**[Watch the 2:41 demo](docs/media/quiet-margin-judge-demo.mp4)** · [English captions](docs/media/quiet-margin-judge-demo.srt) · [All 16 transactions and blocks](docs/QUIET-MARGIN-DEMO.md)
 
-| Path | What it is | Needs |
-| --- | --- | --- |
-| [A. Testnet app](#a-testnet-app-real-browser-workflow) | The real consumer app signing real testnet transactions | A local funded coordinator, which needs **operator setup** (keys judges don't have) |
-| [B. Credential-free evidence](#b-credential-free-evidence) | Read-only replay of recorded testnet transactions plus a strict receipt check against public RPC | Node 22, no install, **no credentials** |
-| [C. Reproduce from source](#c-reproduce-from-source-linux-sandbox) | Build everything and run the funded scenario in a local NEAR Sandbox | Linux x86-64 toolchain, **no credentials** |
+| In the video | What to check |
+| --- | --- |
+| 0:09–0:30 · Connect and deposit | A connected NEAR wallet signs to unlock a separate trading key. The public deposit adds 100 mUSDC to the shielded balance. |
+| 0:30–1:10 · Open and inspect | The live BTC/USDT publisher posts a $68,820 mark. The trader opens a 0.001 BTC short with 30 mUSDC margin and 70 mUSDC available. The public open shows the mark and proof. |
+| 1:10–1:32 · Close | The short closes at the same mark. The shielded balance returns to 100 mUSDC and the public wallet stays at 21 mUSDC. |
+| 1:32–1:45 · Withdraw | The trader sends 10 mUSDC to the connected public address. The balances become 90 shielded and 31 public. |
+| 1:45–2:41 · Test liquidation | In a separate pool running the same contract code, NEAR rejects healthy long and short attempts. After controlled price moves, Keeper B settles both while the trader is offline. |
 
-### A. Testnet app (real browser workflow)
+### Verify without a wallet
 
-The consumer app lives in [`exchange/`](exchange/). Its **Private wallet**
-route (`?wallet=burner`) is the current workflow:
+1. From the repository root, run the command below with **Node.js 22+** and internet access. It needs no package installation or credentials.
+2. Expect two `PASS` lines covering 16 finalized NEAR testnet transactions, their inclusion blocks, the trade and withdrawal, and both keeper outcomes.
+3. In the [explorer evidence](docs/QUIET-MARGIN-DEMO.md), compare each rejected liquidation with the accepted call for the same position commitment. The rejected calls return `ERR_PROOF_INVALID`. The accepted calls emit `position_liquidated` and show Keeper B as signer.
 
-1. **Burner.** Create a NEAR testnet burner wallet in the browser, or
-   **recover** one from a local backup file.
-2. **Sign.** Sign the shown text locally. This sends no transaction. A new
-   burner offers an optional backup download.
-3. **Deposit** mock mUSDC into the session's market (signed in the browser).
-4. **Open** a long. The browser proves `open` locally and submits it.
-5. **Close** at a fresh oracle mark (proved locally), then **withdraw**.
-
-The coordinator that provisions and funds each session runs locally and needs
-the operator's `.env` and proving keys, so judges can't run this path without
-the operator. The demo video and the explorer links in
-[JUDGES.md](JUDGES.md#first-look) show it instead.
-[docs/EXCHANGE.md](docs/EXCHANGE.md) has the walkthrough, disclosures, and
-operator setup (Node 22.12 or later).
-
-**Earlier recorded run** (default route, before the burner wallet) at
-`milestone/exchange-funding` (`9211f49`). The run used a local coordinator
-and Edge. The browser was the trader's only signer, and the market was
-keyless. It covered deposit, a user-chosen long open, close at a profit,
-withdraw, a second open, and liquidation by a separate keeper after the
-browser tab was closed. The final balances reconciled with zero bad debt.
-Transaction links are in
-[docs/EXCHANGE.md](docs/EXCHANGE.md#verified-local-testnet-run).
-
-Limits of that run include long-only mock assets and a local instance on
-testnet. The same operator ran the maker, oracle, and both keepers. The
-Shielded Pool is a separate market with its own limits and receipts.
-
-Original milestone tags and source revisions from the working repository.
-
-| Layer | Tag | Commit |
-| --- | --- | --- |
-| 0: native testnet | `milestone/native-testnet` | `0413bd2` |
-| 0: judge evidence | `milestone/judge-evidence` | `8911974` |
-| 1: browser exchange | `milestone/exchange-funding` | `9211f49` |
-| 2: burner wallet and recovery | `milestone/burner-wallet` | `908bb33` |
-
-### B. Credential-free evidence
-
-Recorded evidence from the earlier operator-driven testnet run. It is **not
-the app**. Node 22 on Windows or Linux, no install step:
-
-```text
-node scripts/serve-demo.mjs                       # read-only replay at http://127.0.0.1:8787/
-node scripts/verify-demo-receipts.mjs --strict    # check every replayed receipt against public RPC
+```sh
+node scripts/verify-judge-demo.mjs
 ```
 
-The replay serves only [`demo/`](demo/) on loopback. It never signs, never
-reads live state, and cannot create trades. The verifier needs no keys and
-sends only read-only public RPC queries. It checks hashes, `FINAL` status,
-signers, receivers, methods, listed public arguments, failure reasons, event
-logs, oracle state at execution, Wasm hashes, roles, verifying-key
-fingerprints, and final ledger balances. A complete run ends with
-`96 passed, 0 failed, 0 skipped`; `--strict` makes any archival `SKIP` fail.
-The 96/96 result was recorded at both layer 0 tags. Details are in
-[JUDGES.md](JUDGES.md#2-check-the-receipts-yourself-1-minute).
+### Reproduce the keeper scenario locally
 
-### C. Reproduce from source (Linux Sandbox)
-
-On Ubuntu 24.04 x86-64 with rustup, Node 22.10.0, npm, curl, and tar, from a clean
-checkout:
+On Ubuntu 24.04 x86-64 with glibc 2.39+, rustup, Node.js 22.10.0, npm, curl, and tar:
 
 ```bash
 bash scripts/sandbox.sh
 ```
 
-The script downloads checksum-pinned cargo-near 0.23.0 and NEAR Sandbox
-2.14.0, builds the native Wasm contracts and the Rust prover, runs the funded
-keeper-failover scenario in a local Sandbox, then runs the Rust suites. It
-needs no wallet, RPC key, or external feed. The pinned Sandbox binary needs Linux x86-64 with glibc 2.39 or newer. The fixture is synthetic, and Sandbox-only proving and keeper keys
-live in a temporary directory. Evidence (public proofs, receipts, Wasm and
-verifying-key hashes, timings, ledger snapshots) goes to
-`.sandbox/evidence.json`; [`docs/SANDBOX-EVIDENCE.md`](docs/SANDBOX-EVIDENCE.md)
-records a reviewed run.
+The script builds the NEAR contracts and prover, runs the original funded long-market scenario in NEAR Sandbox, and runs Rust tests. It uses synthetic test data and local keys. Look for the healthy liquidation rejection and backup keeper success in `.sandbox/evidence.json`. The separate [Shielded Pool testnet verifier](docs/QUIET-MARGIN-DEMO.md#verify-from-a-checkout) covers the recorded long and short.
 
-Provenance, not part of the judge path: the same command runs in the
-repository's [Sandbox workflow](.github/workflows/sandbox.yml). A run recorded
-while the repository was private is
-[actions/runs/43179059728](https://github.com/unspecifiedcoder/xythum-near-perps/actions/runs/43179059728).
+### Try a trade in a running testnet session
 
-## What the public can see
+The full trade uses an operator-run instance at `/shielded?pool=live`. The instance needs a funded faucet, an active price publisher, and keeper acknowledgments at open. See the [testnet operator setup](docs/SHIELDED-COLLATERAL.md#shielded-pool-with-offline-liquidation).
 
-- The open transaction includes a nonce, salted commitment, keeper
-  acknowledgments, and proof. The staging transaction stores two keeper
-  ciphertexts. Neither publishes the plaintext size, entry, or margin.
-- The fixed 600 mUSDC escrow, oracle rounds and prices, accounts, settlement
-  amounts, and withdrawals are **public**.
-- The **maker** sees size and entry off chain so it can price the quote.
-- Both **keepers** can decrypt the full witness, including margin, so either
-  can liquidate alone. They are trusted to keep it private.
-- **Settlement may allow inference.** Public refunds, marks, and the maker's
-  price band can narrow or fix hidden values after a close or liquidation
-  ([JUDGES.md](JUDGES.md#5-threat-model-and-limits)).
+1. Connect a NEAR testnet wallet and sign the unlock message. The app derives the separate trading key for that wallet and site.
+2. Claim test funds if enabled, then deposit 100 mUSDC from the connected wallet. The shielded balance increases by 100.
+3. Choose 0.001 BTC and 30 mUSDC of isolated margin at a mark within the ticket’s 3× cap. Open a private short. NEAR confirms the proof and the balance shows 70 mUSDC available.
+4. Close to return proceeds to the shielded balance. A withdrawal is optional. Its amount and recipient are visible in the standard NEAR token transfer.
+
+## Privacy and operating limits
+
+- **Open:** The public call contains a separate signer, an entry mark, commitments, and a proof. It omits plaintext direction, exact size, and margin. Public funding and timing can help correlate activity.
+- **Settlement:** A close or liquidation can create a new shielded note. Public maker accounting and price moves can reveal P&L and sometimes help infer position terms. Ordinary withdrawals publish the recipient and amount.
+- **Keepers and prices:** Both designated keepers verify encrypted copies at open and can read the position terms. Either can settle an eligible liquidation alone. One trusted publisher relays live Binance BTC/USDT data to the live test pool. A controlled mark in the separate test pool makes liquidation repeatable.
+- **Scope:** The testnet prototype uses one BTC market, isolated margin with a 3× cap, mock collateral, and a funded maker vault.
 
 ## Hackathon changes and prior work
 
-The Xythum EVM `Xythum-Labs/darkpool-gateway` at
-`e5cbe25965ec546ac6e691704d9c176137cf561c` was a **read-only design
-reference**. No Solidity contracts or circuits were reused. The exchange UI
-reuses its layout and visual language only; the headers of
-[`exchange/src/ui/exchange.js`](exchange/src/ui/exchange.js) and
-[`exchange/src/ui/exchange.css`](exchange/src/ui/exchange.css) list the
-source files ([design provenance](docs/EXCHANGE.md#design-provenance)).
+The starting point was the [NEAR Basic Auction tutorial](https://docs.near.org/tutorials/auction/basic-auction), recorded in the [baseline commit](https://github.com/unspecifiedcoder/xythum-near-perps/commit/2cce65a). The pre-existing Xythum EVM project was a design reference. The trading UI adapts its layout and visual language. The NEAR contracts and circuits were built in this repository. [Hackathon diff](https://github.com/unspecifiedcoder/xythum-near-perps/compare/2cce65a...build/consumer-exchange) · [UI provenance](docs/EXCHANGE.md#design-provenance)
 
-New in this repository:
-
-| Area | Source |
+| Built for NEAR | Source |
 | --- | --- |
-| NEAR clearing contract and on-chain Groth16 verifier | [`src/lib.rs`](src/lib.rs), [`src/verifier.rs`](src/verifier.rs) |
-| Proof statements, reference model, native prover | [`prover/src/circuit.rs`](prover/src/circuit.rs), [`prover/src/model.rs`](prover/src/model.rs), [`prover/`](prover/) |
-| Browser prover | [`prover/browser/`](prover/browser/) |
-| Consumer app, burner wallet, coordinator | [`exchange/src/`](exchange/src/), [`exchange/src/ui/burner.js`](exchange/src/ui/burner.js), [`exchange/server/`](exchange/server/) |
-| Keeper actors, Sandbox and testnet runners | [`tests/`](tests/), [`scripts/`](scripts/) |
-| Replay and receipt verifier | [`demo/`](demo/), [`scripts/verify-demo-receipts.mjs`](scripts/verify-demo-receipts.mjs) |
+| Shielded pool, margin settlement, and native verification | [Pool contract](src/shielded_pool.rs), [verifier](src/verifier.rs) |
+| Groth16 proof statements and browser prover | [Pool circuits](prover/src/pool_fast.rs), [browser build](prover/browser/README.md) |
+| Wallet connection, trading UI, and operator services | [Exchange](exchange/), [keeper services](exchange/server/pool-keepers.mjs) |
+| Testnet evidence and local reproduction | [Demo receipts](docs/QUIET-MARGIN-DEMO.md), [Sandbox evidence](docs/SANDBOX-EVIDENCE.md) |
 
-The root commit contains the [NEAR Basic Auction starter](https://docs.near.org/tutorials/auction/basic-auction) imported before implementing Quiet Margin. Compare it with this checkout to see the NEAR work built for the hackathon.
+Libraries and tools include NEAR SDK, near-workspaces, Arkworks, wasm-bindgen, NEAR Connect, and Vite. Claude Code and Codex assisted with implementation, review, and verification. Dependency versions are pinned in the lockfiles.
 
-```text
-git diff $(git rev-list --max-parents=0 HEAD) HEAD
-```
-
-- [Testnet exchange: recorded run, user and operator guide](docs/EXCHANGE.md)
-- [Browser prover build and smoke tests](prover/browser/README.md)
-- [Funded market specification](docs/FUNDED-MARKET.md)
-- [Testnet addresses and local credential locations](docs/TESTNET-ADDRESSES.md)
-- [Original Sandbox specification](docs/SPEC.md)
-- [Build decisions](docs/DECISIONS.md)
-- [Verified Sandbox evidence](docs/SANDBOX-EVIDENCE.md)
-- [Submission checklist and recording](docs/SUBMISSION-CHECKLIST.md)
-
-## License
-
-[MIT](LICENSE), proposed for the public release.
+[Detailed judge guide](JUDGES.md) · [Submission checklist](docs/SUBMISSION-CHECKLIST.md) · [MIT license](LICENSE)
