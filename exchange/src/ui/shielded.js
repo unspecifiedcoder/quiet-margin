@@ -1,4 +1,4 @@
-import { PoolClient } from '../protocol/shielded-pool.js';
+import { PoolClient, poseidonPool } from '../protocol/shielded-pool.js';
 import { unlockConnectedTrader } from '../protocol/connected-wallet.js';
 import { isAccountId } from '../protocol/api.js';
 import { btcToLots } from '../protocol/model.js';
@@ -8,7 +8,7 @@ const money = (cents) => (cents / 100).toLocaleString('en-US', { minimumFraction
 const el = (id) => document.getElementById('sp-' + id);
 const explorer = 'https://testnet.near.rocks';
 
-function localProof(kind, fingerprint, witness) {
+function localProof(kind, fingerprint, witness, version) {
   return new Promise((resolve, reject) => {
     const worker = new Worker(new URL('../protocol/shielded-prover.worker.js', import.meta.url), { type: 'module' });
     const timeout = setTimeout(() => finish(new Error('Local proving timed out. Try again on a desktop browser.')), 12 * 60_000);
@@ -23,7 +23,7 @@ function localProof(kind, fingerprint, witness) {
       else finish(new Error(data.error));
     };
     worker.onerror = () => finish(new Error('The browser ran out of memory or could not start the prover.'));
-    worker.postMessage({ kind, fingerprint, witness });
+    worker.postMessage({ kind, fingerprint, witness, version });
   });
 }
 
@@ -179,11 +179,18 @@ export async function mountShieldedPool(root) {
       return 'Connected · ' + account;
     }
     const trader = await unlockConnectedTrader(wallet, account, location.origin);
-    const next = new PoolClient({ account, wallet, trader, pool: config.pool, token: config.token,
+    let hashes;
+    if (config.proofVersion === 'poseidon-v1') {
+      const artifact = '/shielded/prover/xythum_prover.js';
+      const wasm = await import(/* @vite-ignore */ artifact);
+      await wasm.default();
+      hashes = poseidonPool(wasm);
+    }
+    const next = new PoolClient({ account, wallet, trader, pool: config.pool, token: config.token, hashes,
       prove(kind, fingerprint, witness) {
         const expected = kind === 'spend' ? config.spendVk : config.closeVk;
         if (fingerprint !== expected) throw new Error('The pool verifying key differs from this deployment.');
-        return desktopHelper ? helperProof(kind, fingerprint, witness) : localProof(kind, fingerprint, witness);
+        return desktopHelper ? helperProof(kind, fingerprint, witness) : localProof(kind, fingerprint, witness, config.proofVersion);
       } });
     data = await next.initialize();
     gasReady = await next.gasReady();
@@ -237,7 +244,7 @@ export async function mountShieldedPool(root) {
     const deployment = await response.json();
     if (![deployment.pool, deployment.token].every(isAccountId)) throw new Error('Invalid shielded pool deployment.');
     config = deployment;
-    if (location.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(location.hostname)) {
+    if (!deployment.proofVersion && location.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(location.hostname)) {
       const health = await fetch('/api/health', { signal: AbortSignal.timeout(3_000) })
         .then((response) => response.ok ? response.json() : null).catch(() => null);
       desktopHelper = health?.local_pool_prover === true;

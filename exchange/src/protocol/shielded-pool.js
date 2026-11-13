@@ -30,19 +30,42 @@ export async function noteFields(domain, owner, note) {
   return { inner: toBase64(inner), leaf: toBase64(leaf), nullifier: toBase64(nullifier), tag: toBase64(tag) };
 }
 
-export async function merklePath(leaves, index) {
+async function shaBranches(row) {
+  const next = [];
+  for (let i = 0; i < row.length; i += 2) next.push(hash('QM:branch:1', row[i], row[i + 1]));
+  return Promise.all(next);
+}
+
+export async function merklePath(leaves, index, branches = shaBranches) {
   if (leaves.length > 2 ** DEPTH || index < 0 || index >= leaves.length) throw new Error('The note is absent from this root.');
   let row = Array.from({ length: 2 ** DEPTH }, (_, i) => leaves[i] ? bytes(leaves[i]) : ZERO);
   const siblings = [], right = [];
   for (let level = 0; level < DEPTH; level += 1) {
     siblings.push(list(row[index ^ 1]));
     right.push(Boolean(index & 1));
-    const next = [];
-    for (let i = 0; i < row.length; i += 2) next.push(hash('QM:branch:1', row[i], row[i + 1]));
-    row = await Promise.all(next);
+    row = await branches(row);
     index >>= 1;
   }
   return { siblings, right, root: toBase64(row[0]) };
+}
+
+export function poseidonPool(wasm) {
+  const call = (operation, args) => JSON.parse(wasm.pool_hash(operation, JSON.stringify(args)));
+  return {
+    noteFields(domain, owner, note) {
+      const [inner, leaf, nullifier, tag] = call('note', [list(domain), list(owner), note])
+        .map((value) => toBase64(Uint8Array.from(value)));
+      return { inner, leaf, nullifier, tag };
+    },
+    branches(row) {
+      const pairs = [];
+      for (let i = 0; i < row.length; i += 2) pairs.push([list(row[i]), list(row[i + 1])]);
+      return call('branches', pairs).map((value) => Uint8Array.from(value));
+    },
+    commitment(context, blinder, lots, entry, margin) {
+      return Uint8Array.from(call('position', [list(context), list(blinder), lots, entry, margin]));
+    },
+  };
 }
 
 function verifyWalletTransaction(result) {
@@ -52,9 +75,9 @@ function verifyWalletTransaction(result) {
 }
 
 export class PoolClient {
-  constructor({ account, wallet, trader, pool, token, journalStore, prove, rpc = new Rpc(TESTNET_RPC) }) {
+  constructor({ account, wallet, trader, pool, token, journalStore, prove, hashes, rpc = new Rpc(TESTNET_RPC) }) {
     if (![account, pool, token].every(isAccountId)) throw new Error('Invalid pool configuration.');
-    Object.assign(this, { account, wallet, trader, pool, token, journalStore, prove, rpc });
+    Object.assign(this, { account, wallet, trader, pool, token, journalStore, prove, hashes, rpc });
     this.key = 'pool-notes:' + pool;
   }
 
@@ -67,12 +90,14 @@ export class PoolClient {
     await this.exclusive(() => this.chain.resolveJournal());
     const state = await this.state();
     if (state.token !== this.token) throw new Error('This pool uses a different token.');
+    if ((state.proof_version === 'poseidon-v1') !== Boolean(this.hashes)) throw new Error('The pool proof version differs from this deployment.');
     this.domain = bytes(state.domain);
     this.owner = await sha256(await signer.sign(concat(utf8('Quiet Margin private collateral v2:'), this.domain)));
     return this.read();
   }
 
   state() { return this.rpc.view(this.pool, 'get_pool'); }
+  noteFields(note) { return (this.hashes?.noteFields ?? noteFields)(this.domain, this.owner, note); }
   records() { return this.trader.store.getSealed(this.key).then((records) => records ?? { notes: [], positions: [] }); }
   save(records) { return this.trader.store.putSealed(this.key, records); }
 
@@ -131,7 +156,7 @@ export class PoolClient {
     const [state, records, wallet] = await Promise.all([
       this.state(), this.records(), this.rpc.view(this.token, 'ft_balance_of', { account_id: this.account }),
     ]);
-    const owned = await Promise.all(records.notes.map(async (note) => ({ note, ...await noteFields(this.domain, this.owner, note) })));
+    const owned = await Promise.all(records.notes.map(async (note) => ({ note, ...await this.noteFields(note) })));
     const live = owned.filter((n) => state.leaves.includes(n.leaf) && !state.spent.includes(n.nullifier));
     return { state, records, live, wallet: Number(wallet),
       balance: live.reduce((sum, { note }) => sum + note.cents, 0),
@@ -142,7 +167,7 @@ export class PoolClient {
   async deposit(value) {
     const cents = usdToCents(value, { max: 1_000_000 });
     const fresh = note(cents);
-    const fields = await noteFields(this.domain, this.owner, fresh);
+    const fields = await this.noteFields(fresh);
     const records = await this.records();
     records.notes.push(fresh);
     await this.save(records);
@@ -173,9 +198,9 @@ export class PoolClient {
     const chosen = pair ?? (selected ? [selected] : []);
     if (!chosen.length) throw new Error('This action needs one or two notes that cover the amount.');
     const change = note(chosen.reduce((sum, n) => sum + n.note.cents, 0) - cents);
-    const changeLeaf = change.cents ? (await noteFields(this.domain, this.owner, change)).leaf : ZERO_TEXT;
+    const changeLeaf = change.cents ? (await this.noteFields(change)).leaf : ZERO_TEXT;
     const inputs = await Promise.all(chosen.map(async (n) => {
-      const path = await merklePath(view.state.leaves, view.state.leaves.indexOf(n.leaf));
+      const path = await merklePath(view.state.leaves, view.state.leaves.indexOf(n.leaf), this.hashes?.branches);
       if (path.root !== view.state.root) throw new Error('The pool root could not be verified.');
       return { note: n.note, siblings: path.siblings, right: path.right };
     }));
@@ -195,11 +220,13 @@ export class PoolClient {
       throw new Error('The position must fit the 3× leverage cap at the NEAR mark.');
     }
     const context = randomBytes(32), blinder = randomBytes(32);
-    const commitment = toBase64(await sha256(context, blinder, two(lots), two(entry), integer(margin, 4)));
+    if (this.hashes) context[31] &= 0x3f;
+    const commitment = toBase64(this.hashes ? this.hashes.commitment(context, blinder, lots, entry, margin)
+      : await sha256(context, blinder, two(lots), two(entry), integer(margin, 4)));
     const position = { commitment, context: list(context), blinder: list(blinder), entry, lots, margin };
     view.records.positions.push(position);
     await this.save(view.records);
-    const { tag } = await noteFields(this.domain, this.owner, witness.change);
+    const { tag } = await this.noteFields(witness.change);
     const proof = await this.prove('spend', view.state.spend_vk_sha256, {
       ...witness, context: position.context, blinder: position.blinder, lots, entry, margin, withdraw: 0, recipient: list(ZERO),
     });
@@ -212,7 +239,7 @@ export class PoolClient {
     const pnl = Math.min((state.price_ticks - position.entry) * position.lots, 60_000);
     const payout = note(Math.max(0, position.margin + pnl));
     const maker_credit = 60_000 + position.margin - payout.cents;
-    const leaf = payout.cents ? (await noteFields(this.domain, this.owner, payout)).leaf : ZERO_TEXT;
+    const leaf = payout.cents ? (await this.noteFields(payout)).leaf : ZERO_TEXT;
     if (payout.cents) records.notes.push(payout);
     await this.save(records);
     const { commitment, ...opening } = position;
@@ -237,7 +264,8 @@ export class PoolClient {
 
   async call(method, args, deposit = 0n) {
     await this.chain.resolveJournal();
-    const result = await this.chain.call(method, this.pool, [functionCall(method, args, { gas: 120n * TGAS, deposit })]);
+    const gas = this.hashes && method === 'withdraw_private' ? 180n * TGAS : 120n * TGAS;
+    const result = await this.chain.call(method, this.pool, [functionCall(method, args, { gas, deposit })]);
     return result.hash;
   }
 }

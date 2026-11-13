@@ -12,15 +12,18 @@ const env = parseEnv(readFileSync(file('.testnet/quiet-margin-wallet-recording/t
 const wallet = parseEnv(readFileSync(file('.testnet/quiet-margin-wallet-recording/.env'), 'utf8')).NEAR_ACCOUNT_ID;
 assert.equal(env.NEAR_NETWORK_ID, 'testnet');
 assert.equal(env.NEAR_RPC_URL, TESTNET_RPC);
-const pool = 'shielded.' + env.NEAR_DEMO_ACCOUNT_ID;
+const args = process.argv.slice(2);
+const browserPool = args[0] === '--browser-pool';
+if (browserPool) args.shift();
+const pool = (browserPool ? 'browser-pool.' : 'shielded.') + env.NEAR_DEMO_ACCOUNT_ID;
 const token = env.NEAR_TOKEN_ACCOUNT_ID;
 const oracle = env.NEAR_ORACLE_ACCOUNT_ID;
 const maker = env.NEAR_DEMO_ACCOUNT_ID;
 const keys = Object.fromEntries(['spend', 'close'].map((kind) => {
-  const vk = readFileSync(file('.testnet/shielded/keys/' + kind + '.vk'));
+  const vk = readFileSync(file('.testnet/shielded/' + (browserPool ? 'browser-keys' : 'keys') + '/' + kind + '.vk'));
   return [kind, { bytes: vk.toString('base64'), fingerprint: createHash('sha256').update(vk).digest('base64') }];
 }));
-const wasm = readFileSync(file('target/pool-build/wasm32-unknown-unknown/release/xythum_near_perps.wasm'));
+const wasm = readFileSync(file('target/' + (browserPool ? 'browser-pool' : 'pool-build') + '/wasm32-unknown-unknown/release/xythum_near_perps.wasm'));
 const chain = await connectChain(TESTNET_RPC, true);
 const marketKey = KeyPair.fromString(env.NEAR_MARKET_SECRET_KEY);
 const { DEMO, POOL, ORACLE } = await demoAccounts(chain, {
@@ -30,7 +33,7 @@ const { DEMO, POOL, ORACLE } = await demoAccounts(chain, {
 });
 const view = (id, method, args) => viewFinal(chain, id, method, args);
 const record = { pool, token, oracle, wallet, keyFingerprints: { spend: keys.spend.fingerprint, close: keys.close.fingerprint } };
-const journal = file('.testnet/shielded/deployment.json');
+const journal = file('.testnet/shielded/' + (browserPool ? 'browser-deployment.json' : 'deployment.json'));
 try { Object.assign(record, JSON.parse(readFileSync(journal, 'utf8'))); }
 catch (error) { if (error.code !== 'ENOENT') throw error; }
 assert.equal(record.pool, pool);
@@ -52,11 +55,11 @@ async function account(id) {
     throw error;
   }
 }
-if (process.argv.length > 2) {
-  const [command, id] = process.argv.slice(2);
+if (args.length > 0) {
+  const [command, id] = args;
   assert(command === '--activate' && /^[a-f0-9]{64}$/.test(id), 'Use --activate with an implicit NEAR account.');
   const funded = BigInt((await account(id))?.amount ?? 0);
-  const target = 15n * 10n ** 22n;
+  const target = (browserPool ? 35n : 15n) * 10n ** 22n;
   if (funded < target) {
     const tx = await DEMO.batch(id).transfer(target - funded).transact();
     assert(tx.succeeded && tx.receiptFailures.length === 0, 'Testnet gas funding failed.');
@@ -101,6 +104,7 @@ if (!record.wallet_funding && Number(await view(token, 'ft_balance_of', { accoun
   await track('wallet_funding', call(DEMO, token, 'ft_transfer', { receiver_id: wallet, amount: '10000' }, 1n));
 }
 const data = { pool, token, spendVk: keys.spend.fingerprint, closeVk: keys.close.fingerprint };
+if (browserPool) data.proofVersion = 'poseidon-v1';
 mkdirSync(file('exchange/public/shielded/'), { recursive: true });
 writeFileSync(file('exchange/public/shielded/config.json'), JSON.stringify(data, null, 2) + '\n');
 console.log(JSON.stringify(record, null, 2));
