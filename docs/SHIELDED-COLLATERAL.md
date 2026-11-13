@@ -4,13 +4,25 @@ Open **Shielded Pool** in Quiet Margin. Connect a NEAR testnet wallet, then sign
 the NEP-413 unlock message. The same wallet key and app origin derive the same
 private trading key. The signature stays in the browser.
 
-## Verified deposits
+## Verified testnet trade
 
-The connected wallet signed separate deposits of 60 and 40 mUSDC into the
-same NEAR testnet pool. Run `node scripts/verify-shielded-receipts.mjs` to
-check finality, token, pool, amount, and distinct note commitments through
-public RPC. [60 mUSDC deposit](https://testnet.near.rocks/tx/4jmNQpzBxzeXeSzDy4F5Yt9eBzwkvuqdwa6eTdFVzwp2) ·
-[40 mUSDC deposit](https://testnet.near.rocks/tx/9hNTdytrFupLxtABGDGECJEzkALbT2m32tZTJMrP6yeC)
+The connected wallet signed 60 and 40 mUSDC deposits. The private trader
+opened a 0.001 BTC long with 30 mUSDC margin and 70 mUSDC in shielded change.
+Closing at the same mark returned the original 30 as a new note. A withdrawal
+sent 100 mUSDC back to the connected wallet.
+
+| Step | Final NEAR evidence |
+| --- | --- |
+| Deposit 60 mUSDC | [Receipt](https://testnet.near.rocks/tx/13rxnZz1S8ReVZTpd8x6EDdDvf1icgzbPU2vTYzVUyg8) |
+| Deposit 40 mUSDC | [Receipt](https://testnet.near.rocks/tx/ENVE3ir58UJGBjtdti2VYfuzEscqz3N38jj4sp5YvnwZ) |
+| Open the private long | [Receipt](https://testnet.near.rocks/tx/5ibU1UBpeLXgppNqQ7SLAEp9P7SWQjAZit1QBmLXbwiB) · [Block 277514961](https://testnet.near.rocks/block/AvyYXreSAWwoRssGB6s7qibcFhuXtJDGqCgS5Uz5fVaB) |
+| Close the long | [Receipt](https://testnet.near.rocks/tx/A4hYKgcQ6xMjLhiYx15UqT14uz3m4bHrLwm4nqkRgtvu) |
+| Withdraw 100 mUSDC | [Receipt](https://testnet.near.rocks/tx/CTeExcWJj4rPQCHbvTe395sh3w9vHiR1QDtj9HoGMppS) |
+
+Run `node scripts/verify-shielded-receipts.mjs` for an independent check of
+the final receipts, transaction fields, pool events, and opening block. The
+browser recording shows the 30 and 70 balances. The public verifier checks
+their commitments and the successful NEAR execution.
 
 ## Walkthrough
 

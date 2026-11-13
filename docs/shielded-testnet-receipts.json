@@ -4,12 +4,20 @@
   "token": "musdc.qm-treasury-a280bef3.testnet",
   "deposits": [
     {
-      "hash": "4jmNQpzBxzeXeSzDy4F5Yt9eBzwkvuqdwa6eTdFVzwp2",
+      "hash": "13rxnZz1S8ReVZTpd8x6EDdDvf1icgzbPU2vTYzVUyg8",
       "cents": "6000"
     },
     {
-      "hash": "9hNTdytrFupLxtABGDGECJEzkALbT2m32tZTJMrP6yeC",
+      "hash": "ENVE3ir58UJGBjtdti2VYfuzEscqz3N38jj4sp5YvnwZ",
       "cents": "4000"
     }
-  ]
+  ],
+  "lifecycle": {
+    "trader": "d6a1e3f4bf4f1c127063ff56ad72768b9c2ef3c5e54cae2a991316199ea1cfcb",
+    "open": "5ibU1UBpeLXgppNqQ7SLAEp9P7SWQjAZit1QBmLXbwiB",
+    "close": "A4hYKgcQ6xMjLhiYx15UqT14uz3m4bHrLwm4nqkRgtvu",
+    "withdrawal": "CTeExcWJj4rPQCHbvTe395sh3w9vHiR1QDtj9HoGMppS",
+    "block": "AvyYXreSAWwoRssGB6s7qibcFhuXtJDGqCgS5Uz5fVaB",
+    "height": 277514961
+  }
 }
