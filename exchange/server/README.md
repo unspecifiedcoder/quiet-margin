@@ -1,4 +1,6 @@
-# Exchange session coordinator (testnet)
+# Original exchange session coordinator (testnet)
+
+The current Shielded Pool uses [`judge-server.mjs`](judge-server.mjs). See the [operator guide](../../docs/SHIELDED-COLLATERAL.md#shielded-pool-with-offline-liquidation) for setup.
 
 A small Node HTTP service that gives each consumer browser its own isolated
 Xythum market on NEAR testnet. It runs the existing maker, oracle and keeper

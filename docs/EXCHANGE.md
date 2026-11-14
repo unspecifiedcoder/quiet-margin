@@ -1,4 +1,6 @@
-# Quiet Margin testnet exchange
+# Original funded-market exchange
+
+For the current long and short trading flow, start with the [Shielded Pool guide](SHIELDED-COLLATERAL.md) and [demo receipts](QUIET-MARGIN-DEMO.md).
 
 `exchange/` is the consumer app. It has three parts: a browser client with an
 in-browser Groth16 prover, a Vite UI, and a Node session coordinator

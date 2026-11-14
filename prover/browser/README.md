@@ -1,4 +1,6 @@
-# Browser prover
+# Original funded-market browser prover
+
+For the current Shielded Pool, see the [pool circuits](../src/pool_fast.rs) and [browser trading walkthrough](../../docs/SHIELDED-COLLATERAL.md).
 
 The open and voluntary-close Groth16 provers of `xythum-prover`, compiled to
 `wasm32-unknown-unknown` and bound with wasm-bindgen `--target web`. It uses the

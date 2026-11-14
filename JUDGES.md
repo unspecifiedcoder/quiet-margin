@@ -157,7 +157,7 @@ or external price feed. The pinned Sandbox binary needs Linux x86-64 with glibc 
 Windows, use Ubuntu 24.04 in WSL or the repository's
 [Sandbox workflow](.github/workflows/sandbox.yml). Provenance only: a run
 recorded while the repository was private is
-[actions/runs/43179059728](https://github.com/unspecifiedcoder/xythum-near-perps/actions/runs/43179059728).
+[actions/runs/43179059728](https://github.com/unspecifiedcoder/quiet-margin/actions/runs/43179059728).
 A clean Linux checkout is the reproducible path. The Sandbox scenario prints one JSON summary line, then the Node
 test runner reports one passing test. In a terminal it looks like this:
 

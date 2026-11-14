@@ -1,11 +1,11 @@
 # Native NEAR Sandbox evidence
 
-The [Linux x86-64 run](https://github.com/unspecifiedcoder/xythum-near-perps/actions/runs/43163396217)
+The [Linux x86-64 run](https://github.com/unspecifiedcoder/quiet-margin/actions/runs/43163396217)
 passed at commit `962f317cfd4417bd61c266a32427b2f01163947f`. It used native
 NEAR Sandbox 2.14.0, protocol 88, Rust 1.95.0, cargo-near 0.23.0,
 near-sdk 5.30.1, Arkworks 0.5, Node 22.10.0, and near-workspaces 5.0.0.
 All 63 Rust tests passed in the same run. The
-[JSON artifact](https://github.com/unspecifiedcoder/xythum-near-perps/actions/runs/43163396217/artifacts/13919053497)
+[JSON artifact](https://github.com/unspecifiedcoder/quiet-margin/actions/runs/43163396217/artifacts/13919053497)
 contains the public proof bytes, oracle rounds, gas profiles, and ledger
 snapshots.
 

@@ -1,4 +1,6 @@
-# Hosting the testnet session coordinator on Fly.io
+# Hosting the original funded-market coordinator on Fly.io
+
+For the current Shielded Pool, use the [operator guide](SHIELDED-COLLATERAL.md#shielded-pool-with-offline-liquidation).
 
 This is the package for running `exchange/server` (the testnet session
 coordinator plus the built exchange UI) as one always-on Fly Machine. It lives

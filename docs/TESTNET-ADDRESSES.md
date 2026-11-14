@@ -103,8 +103,8 @@ liquidation burned 22.383 Tgas, including transaction receipts.
 
 The local public journals are `.testnet/deployment.json` and
 `.testnet/demo-1.json`. For the simultaneous close-versus-liquidation
-race and negative cases, see the [reviewed Sandbox run](https://github.com/unspecifiedcoder/xythum-near-perps/actions/runs/43173872146)
-and its [receipt artifact](https://github.com/unspecifiedcoder/xythum-near-perps/actions/runs/43173872146/artifacts/13923741437).
+race and negative cases, see the [reviewed Sandbox run](https://github.com/unspecifiedcoder/quiet-margin/actions/runs/43173872146)
+and its [receipt artifact](https://github.com/unspecifiedcoder/quiet-margin/actions/runs/43173872146/artifacts/13923741437).
 In that run, liquidation won and close returned `ERR_NO_ACTIVE`.
 The [pre-deployment review](TESTNET-REVIEW.md) records the testnet scope and
 the remaining production-readiness limits.

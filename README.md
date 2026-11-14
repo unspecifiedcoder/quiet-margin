@@ -54,7 +54,7 @@ The full trade uses an operator-run instance at `/shielded?pool=live`. The insta
 
 ## Hackathon changes and prior work
 
-The starting point was the [NEAR Basic Auction tutorial](https://docs.near.org/tutorials/auction/basic-auction), recorded in the [baseline commit](https://github.com/unspecifiedcoder/xythum-near-perps/commit/2cce65a). The pre-existing Xythum EVM project was a design reference. The trading UI adapts its layout and visual language. The NEAR contracts and circuits were built in this repository. [Hackathon diff](https://github.com/unspecifiedcoder/xythum-near-perps/compare/2cce65a...build/consumer-exchange) · [UI provenance](docs/EXCHANGE.md#design-provenance)
+The starting point was the [NEAR Basic Auction tutorial](https://docs.near.org/tutorials/auction/basic-auction), recorded in the [baseline commit](https://github.com/unspecifiedcoder/quiet-margin/commit/2cce65a). The pre-existing Xythum EVM project was a design reference. The trading UI adapts its layout and visual language. The NEAR contracts and circuits were built in this repository during the hackathon. [Hackathon diff](https://github.com/unspecifiedcoder/quiet-margin/compare/2cce65a...main) · [UI provenance](docs/EXCHANGE.md#design-provenance)
 
 | Built for NEAR | Source |
 | --- | --- |
