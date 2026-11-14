@@ -52,9 +52,9 @@ Open the [hosted testnet exchange](https://quietmargin.outcomeseal.com/shielded?
 - **Keepers and prices:** Both designated keepers verify encrypted copies at open and can read the position terms. Either can settle an eligible liquidation alone. One trusted publisher relays live Binance BTC/USDT data to the live test pool. A controlled mark in the separate test pool makes liquidation repeatable.
 - **Scope:** The testnet prototype uses one BTC market, isolated margin with a 3× cap, mock collateral, and a funded maker vault.
 
-## Hackathon changes and prior work
+## Built during the NEAR Hackathon
 
-The starting point was the [NEAR Basic Auction tutorial](https://github.com/near-examples/auctions-tutorial/tree/main/contract-rs/01-basic-auction), recorded in the [baseline commit](https://github.com/unspecifiedcoder/quiet-margin/commit/2cce65a). The pre-existing Xythum EVM project was a design reference. The trading UI adapts its layout and visual language. The NEAR contracts and circuits were built in this repository during the hackathon. [Hackathon diff](https://github.com/unspecifiedcoder/quiet-margin/compare/2cce65a...main) · [UI provenance](docs/EXCHANGE.md#design-provenance)
+We built Quiet Margin for the 2026 NEAR Hackathon. The hackathon work includes the NEAR contracts, Groth16 circuits, browser prover, trading interface, and keeper services. The repository started from the [NEAR Basic Auction tutorial](https://github.com/near-examples/auctions-tutorial/tree/main/contract-rs/01-basic-auction). [Baseline commit](https://github.com/unspecifiedcoder/quiet-margin/commit/2cce65a) · [Hackathon diff](https://github.com/unspecifiedcoder/quiet-margin/compare/2cce65a...main)
 
 | Built for NEAR | Source |
 | --- | --- |

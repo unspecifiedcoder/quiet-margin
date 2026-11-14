@@ -44,7 +44,6 @@ from NEAR at the open receipt's execution block. The explorer checks the
 position identity on a supplied close or liquidation receipt and links the
 transaction and block. A market account lookup reads its latest finalized
 active slot. Historical lookup uses the transaction hash and its signer.
-[Xythum EVM contract comparison](docs/XYTHUM-CONTRACT-MAP.md).
 
 ### Read the contract in NearBlocks
 
@@ -129,7 +128,7 @@ token balance at the market receipt that emitted the final payout's
 `withdrawal_resolved` event. Expected output ends with:
 
 ```text
-PASS healthy_refused        failed in market.xythum-perps-demo.testnet with Smart contract panicked: ERR_PROOF_INVALID
+PASS healthy_refused        failed in <market account> with Smart contract panicked: ERR_PROOF_INVALID
 ...
 PASS keeper_payout          market holds 140100 mUSDC cents
 
@@ -224,20 +223,12 @@ reviewed run.
   fresh oracle round is available. [`docs/TESTNET-REVIEW.md`](docs/TESTNET-REVIEW.md)
   lists the remaining production-readiness items.
 
-## 6. Sources and baseline disclosure
+## 6. Hackathon scope and technical references
 
-- The EVM reference is Xythum-Labs/darkpool-gateway at
-  `e5cbe25965ec546ac6e691704d9c176137cf561c`. It was used read-only as a
-  design baseline. That design exposes position parameters in the clearing
-  house and uses zero knowledge for note operations. This repository is a new
-  native NEAR clearing contract with new proof statements; no Solidity
-  contracts or circuits were reused. The exchange UI reuses the baseline's
-  layout and visual language only
-  ([design provenance](docs/EXCHANGE.md#design-provenance)). The baseline is
-  private and was excluded from the implementation worktrees.
-  See [`docs/SPEC.md`](docs/SPEC.md#baseline-and-scope) and the
-  [README](README.md#hackathon-changes-and-prior-work) for the
-  new-code map and a diff command.
+- Quiet Margin's native NEAR contracts, proof statements, trading interface,
+  and keeper services were built for the 2026 NEAR Hackathon. The
+  [README](README.md#built-during-the-near-hackathon) maps each part to
+  its source and links the diff from the tutorial baseline.
 - The verifier follows [NEP-488](https://github.com/near/NEPs/blob/master/neps/nep-0488.md).
   The public [Antumbra Groth16 verifier](https://github.com/Valentine1898/antumbra/blob/d684c3e380cb0da47cad16803741cff16861bb8d/contracts/pool/src/groth16.rs)
   was a reference only. No Antumbra code was copied

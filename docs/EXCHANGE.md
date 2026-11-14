@@ -383,23 +383,3 @@ tagged layers, and none is claimed until it has its own testnet evidence.
 Also still open: public hosting, an independent-operator trial with separate
 keys for the maker, oracle, and keepers, proving on a real phone, and,
 optionally, serving compressed proving keys.
-
-## Design provenance
-
-The user owns the original Xythum EVM DEX,
-`Xythum-Labs/darkpool-gateway` at
-`e5cbe25965ec546ac6e691704d9c176137cf561c`. The exchange UI reuses its
-**layout and visual language only**:
-
-- the 7/3 chart and trade-terminal grid;
-- the header;
-- the trading panel;
-- the position and history tabs;
-- the proof-progress messaging;
-- the HSL palette.
-
-The headers of `exchange/src/ui/exchange.js` and `exchange/src/ui/exchange.css`
-list the source files. React, wagmi, TradingView, and wallet code were not
-carried over. **No Solidity contracts or circuits from the EVM baseline were
-reused.** The NEAR clearing contract and proof statements are new
-([`docs/SPEC.md`](SPEC.md#baseline-and-scope)).

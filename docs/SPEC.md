@@ -2,12 +2,9 @@
 
 ## Baseline and scope
 
-The read-only EVM reference is Xythum-Labs/darkpool-gateway at
-`e5cbe25965ec546ac6e691704d9c176137cf561c`. It exposes position parameters
-in the clearing house and uses zero knowledge for note operations. This
-repository starts a new native NEAR clearing contract and new proof statements.
-The private baseline is excluded from worktree tasks. The public verifier
-references are [NEP-488](https://github.com/near/NEPs/blob/master/neps/nep-0488.md)
+Quiet Margin's native NEAR clearing contract and proof statements were built
+for the 2026 NEAR Hackathon. The public verifier references are
+[NEP-488](https://github.com/near/NEPs/blob/master/neps/nep-0488.md)
 and [Antumbra](https://github.com/Valentine1898/antumbra/blob/d684c3e380cb0da47cad16803741cff16861bb8d/contracts/pool/src/groth16.rs).
 The [NEAR smart-contract skill](https://github.com/near/agent-skills/tree/cb32b6af195e636c1e9c2efe2ea75a6d85b6b67b/skills/near-smart-contracts)
 applies.

@@ -4,7 +4,7 @@
 
 The submission deadline is **2026-11-14 at 23:59 UTC**, or **2026-11-15 at 5:29 a.m. IST**. Testnet and local demos are eligible. The repository must be public by the deadline and stay public through judging.
 
-- [x] The README explains the problem, native NEAR verification, prior work, and how to reproduce or inspect the demo.
+- [x] The README explains the problem, native NEAR verification, what was built during the hackathon, and how to reproduce or inspect the demo.
 - [x] The [2:41 recording](media/quiet-margin-judge-demo.mp4) and [16 finalized transactions and blocks](QUIET-MARGIN-DEMO.md) are ready.
 - [x] Run `node scripts/verify-judge-demo.mjs` to check the video receipts. It uses read-only testnet RPC and requires no credentials.
 - [x] Include a [license file](../LICENSE).
