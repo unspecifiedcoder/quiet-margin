@@ -39,8 +39,9 @@ mode, where the position terms go directly into chain state, was outside
 this implementation.
 
 In the exchange, select **Position Explorer**. Use the recorded BTC long
-or a Keeper B example to read the commitment, mark and escrow directly
-from NEAR at the open receipt's execution block. The explorer checks the
+to read the commitment, mark and escrow directly from NEAR at the open
+receipt's execution block. The page links the hosted Keeper B liquidation
+and healthy rejection receipts. The explorer checks the
 position identity on a supplied close or liquidation receipt and links the
 transaction and block. A market account lookup reads its latest finalized
 active slot. Historical lookup uses the transaction hash and its signer.

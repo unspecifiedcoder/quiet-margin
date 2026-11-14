@@ -1,16 +1,13 @@
 import { inspectPosition } from '../protocol/position-explorer.js';
 import { formatCents, formatPriceUsd, TICK_USD } from './format.js';
 
-const trader = 'trader.xythum-perps-demo.testnet';
-const keeper = 'keeper-b.xythum-perps-demo.testnet';
 const connectedTrader = 'trader-1589da8d996a.qm-treasury-a280bef3.testnet';
-const liquidationOpen = '5CNs5rAr7KLh8yfTHkMY2dQ9c8zrMtJ22eM3B4xJT1c7';
-const examples = [
-  ['Recorded BTC long', '4m1Zutu6RmJsabJmpYe9Qz93xRjbeLNmUqpcx172zeG5', connectedTrader,
-    'GUVF8KhHzcL8Tsnbkqge7DVJ7YS6X4jQ7HW2D43y2kHc', connectedTrader],
-  ['Keeper B liquidation', liquidationOpen, trader, 'BDRSCJmvMfzCGwtsbtgvwpd1CKaqpZkmFcTj7Gwu7MYW', keeper],
-  ['Healthy liquidation rejected', liquidationOpen, trader, 'GsbCfnM5Z8dyHgPV9VT5ns75HWkfxsmtD3ynYZZVBTpW', keeper],
-];
+const recordedLong = {
+  open: '4m1Zutu6RmJsabJmpYe9Qz93xRjbeLNmUqpcx172zeG5',
+  trader: connectedTrader,
+  settlement: 'GUVF8KhHzcL8Tsnbkqge7DVJ7YS6X4jQ7HW2D43y2kHc',
+  settler: connectedTrader,
+};
 
 function el(tag, className, ...children) {
   const element = document.createElement(tag);
@@ -112,8 +109,11 @@ export function mountPositionExplorer(root, params) {
   mode.addEventListener('change', sync);
   sync();
 
-  const sampleLinks = examples.map(([label, open, trader, settlement, settler]) =>
-    link(label, '/positions?' + new URLSearchParams({ open, trader, settlement, settler })));
+  const sampleLinks = [
+    link('Recorded BTC long', '/positions?' + new URLSearchParams(recordedLong)),
+    link('Keeper B liquidation receipt', chain + '/tx/7BzALdUFVXpJUwckBTvZnw9es7Eu1XAfrYMp7ZatMLV'),
+    link('Healthy liquidation rejection receipt', chain + '/tx/8FsX9uhupmkZyLGimggiFmYat1Va975uKsGQJTswNPod'),
+  ];
   const header = el('header', 'xc-top pe-top', el('span', 'xc-brand', 'Quiet Margin'),
     el('span', 'xc-tag', 'NEAR testnet'), link('Trading terminal', '/'));
   const main = el('main', 'pe-main',
