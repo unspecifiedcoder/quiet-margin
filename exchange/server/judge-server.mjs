@@ -45,7 +45,7 @@ if (process.env.QUIET_POOL_KEEPER_FILE) {
     return keepers[index].acknowledge(envelope);
   };
 }
-const app = createApp({ coordinator, config, poolFunding, poolKeeperAck });
+const app = createApp({ coordinator, config, poolFunding, poolKeeperAck, log: console.log });
 const server = createServer((req, res) => {
   if ((req.method === 'GET' || req.method === 'HEAD') && req.url === '/') {
     res.writeHead(302, { Location: '/shielded', 'Cache-Control': 'no-store' }).end();

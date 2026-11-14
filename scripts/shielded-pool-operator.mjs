@@ -45,14 +45,19 @@ const cfg = await view('get_keeper_config');
 if (mode === 'oracle') {
   assert(cfg.live_oracle, 'This pool is configured for a controlled mark.');
   const signer = await getSigner('ORACLE');
+  let observedAt = cfg.observed_at;
   run = async () => {
+    if (Date.now() / 1000 - observedAt < 40) return;
     const mark = await latestTrade();
     const current = await view('get_keeper_config');
+    observedAt = current.observed_at;
     if (mark.observed_at <= current.observed_at) return;
     // No no-op round changes while the last mark is still useful.
     if (Date.now() / 1000 - current.observed_at < 40) return;
     const { sourcePrice, ...args } = mark;
-    console.log(JSON.stringify({ transaction: await send(signer, 'publish_live_mark', args), sourcePrice, ...args }));
+    const transaction = await send(signer, 'publish_live_mark', args);
+    observedAt = mark.observed_at;
+    console.log(JSON.stringify({ transaction, sourcePrice, ...args }));
   };
 } else {
   assert(mode === 'keeper' && ['A', 'B'].includes(role), 'Use keeper A or B, or oracle.');
@@ -64,6 +69,7 @@ if (mode === 'oracle') {
   const signer = await getSigner(name);
   run = async () => {
     const state = await view('get_pool');
+    if (!state.positions.length) return;
     const mark = cfg.live_oracle ? await view('get_keeper_config') : cfg;
     if (cfg.live_oracle && Date.now() / 1000 - mark.observed_at > 80) return;
     for (const commitment of state.positions) {
@@ -82,5 +88,5 @@ do {
     if (!continuous) throw error;
     console.error('Operator pass failed; retrying.');
   }
-  if (continuous) await wait(mode === 'oracle' ? 6000 : 4000);
+  if (continuous) await wait(mode === 'oracle' ? 6000 : 12_000);
 } while (continuous);
