@@ -66,7 +66,7 @@ async function main() {
   server.headersTimeout = 60_000;
   await new Promise((done, fail) => server.once('error', fail).listen(config.port, config.host, done));
   worker.start();
-  log('xythum session coordinator' + (config.hosted ? ' (hosted, invite required)' : '') + ' on http://'
+  log('Quiet Margin session coordinator' + (config.hosted ? ' (hosted, invite required)' : '') + ' on http://'
     + (config.host.includes(':') ? '[' + config.host + ']' : config.host) + ':' + config.port + ' (testnet, market Wasm ' + wasmSha.slice(0, 12) + ', ' + store.size + '/'
     + config.sessionQuota + ' sessions)');
   if (config.sessionQuota === 0) log('session creation disabled: set XYTHUM_SESSION_QUOTA');

@@ -56,7 +56,7 @@ function failure(err, fallback) {
 
 function backupFileName(accountId) {
   const tag = String(accountId ?? '').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 10) || 'wallet';
-  return `xythum-testnet-burner-${tag}.json`;
+  return `quiet-margin-testnet-wallet-${tag}.json`;
 }
 
 /**

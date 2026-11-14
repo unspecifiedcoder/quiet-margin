@@ -1,4 +1,4 @@
-//! Xythum native NEAR funded-market prototype.
+//! Quiet Margin native NEAR funded-market prototype.
 //!
 //! Default build: the single-slot confidential BTC/mock-USDC clearing contract
 //! described in `docs/FUNDED-MARKET.md` (v2), which overrides the v1

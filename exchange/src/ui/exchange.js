@@ -1,11 +1,5 @@
-// Xythum NEAR Perps — customer exchange UI.
-//
-// Layout lineage: the original Xythum EVM DEX terminal
-// (Xythum-Labs/darkpool-gateway @ e5cbe25965ec546ac6e691704d9c176137cf561c):
-// chart + activity on the left, a trade ticket on the right, positions /
-// history tabs below the chart. React, wagmi, TradingView and wallet code were
-// not carried over. This module is plain DOM; it renders client state and
-// forwards intents to handlers.
+// Quiet Margin exchange UI. This module renders client state and forwards
+// intents to the trading handlers.
 //
 // Rendering rule: every interactive control is created once and only has its
 // text, disabled state and visibility updated. Lists (receipts, rounds,

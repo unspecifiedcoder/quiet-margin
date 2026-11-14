@@ -300,7 +300,7 @@ Expected results:
   attached to that Machine's ID.
 - shared IPv4 and IPv6, no dedicated IPv4
 - logs show `launch: lock: none`, `launch: starting coordinator as uid 10001
-  (quota 1)`, and the banner `xythum session coordinator (hosted, invite
+  (quota 1)`, and the banner `Quiet Margin session coordinator (hosted, invite
   required) on http://0.0.0.0:8080 (… 0/1 sessions)`
 - health returns `{"ok":true,"chain_id":"testnet","sessions":0,"session_quota":1}`
 - plain HTTP redirects to HTTPS

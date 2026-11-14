@@ -1,1 +1,1 @@
-{"name":"xythum-near-perps-sandbox","private":true,"type":"module","scripts":{"sandbox":"node --test tests/sandbox.test.mjs"},"devDependencies":{"near-api-js":"5.1.1","near-workspaces":"5.0.0"}}
+{"name":"quiet-margin-sandbox","private":true,"type":"module","scripts":{"sandbox":"node --test tests/sandbox.test.mjs"},"devDependencies":{"near-api-js":"5.1.1","near-workspaces":"5.0.0"}}

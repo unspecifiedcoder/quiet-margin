@@ -1,4 +1,4 @@
-//! Xythum NEAR sandbox prover: Groth16 (BLS12-381) circuits for the open,
+//! Quiet Margin sandbox prover: Groth16 (BLS12-381) circuits for the open,
 //! liquidation, and close statements of `docs/FUNDED-MARKET.md` (falling back
 //! to `docs/SPEC.md`), a pure Rust reference model, and
 //! NEP-488 encodings consumed by the contract verifier (`src/verifier.rs`).
