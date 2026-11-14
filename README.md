@@ -38,7 +38,7 @@ The script builds the NEAR contracts and prover, runs the original funded long-m
 
 ### Try a trade in a running testnet session
 
-The full trade uses an operator-run instance at `/shielded?pool=live`. The instance needs a funded faucet, an active price publisher, and keeper acknowledgments at open. See the [testnet operator setup](docs/SHIELDED-COLLATERAL.md#shielded-pool-with-offline-liquidation).
+Open the [hosted testnet exchange](https://quietmargin.outcomeseal.com/shielded?pool=live) in a desktop browser. The instance uses a capped faucet, an active price publisher, and keeper acknowledgments at open. See the [testnet operator setup](docs/SHIELDED-COLLATERAL.md#shielded-pool-with-offline-liquidation) and [hosting configuration](exchange/deploy/shielded/).
 
 1. Connect a NEAR testnet wallet and sign the unlock message. The app derives the separate trading key for that wallet and site.
 2. Claim test funds if enabled, then deposit 100 mUSDC from the connected wallet. The shielded balance increases by 100.
