@@ -66,3 +66,7 @@ We built Quiet Margin for the 2026 NEAR Hackathon. The hackathon work includes t
 Libraries and tools include NEAR SDK, near-workspaces, Arkworks, wasm-bindgen, NEAR Connect, and Vite. Claude Code and Codex assisted with implementation, review, and verification. Dependency versions are pinned in the lockfiles.
 
 [Detailed judge guide](JUDGES.md) · [Submission checklist](docs/SUBMISSION-CHECKLIST.md) · [MIT license](LICENSE)
+
+## Historical testnet RPC
+
+After the submission deadline, the regular FastNEAR testnet RPC returned `UNKNOWN_BLOCK` for a recorded inclusion block. The read-only verifier uses FastNEAR's archival endpoint, `https://archival-rpc.testnet.fastnear.com`, to retrieve the historical transactions and blocks. The same command passed all 16 checks against the existing receipts. This maintenance patch changes the verifier's endpoint and documents the lookup.

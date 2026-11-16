@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { Rpc, TESTNET_RPC } from '../exchange/src/protocol/rpc.js';
+import { Rpc } from '../exchange/src/protocol/rpc.js';
 
 const receipts = JSON.parse(await readFile(new URL('../docs/quiet-margin-demo-receipts.json', import.meta.url), 'utf8'));
-const rpc = new Rpc(TESTNET_RPC);
+// Both the transaction and its inclusion block are historical testnet reads.
+const rpc = new Rpc('https://archival-rpc.testnet.fastnear.com');
 
 async function verify(row) {
   const [tx, block] = await Promise.all([
