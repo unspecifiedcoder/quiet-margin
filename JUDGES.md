@@ -1,10 +1,29 @@
 # Quiet Margin judge guide
 
-Start with the [README walkthrough](README.md#start-here), the [2:41 demo](docs/media/quiet-margin-judge-demo.mp4), and the [16 NEAR testnet transactions and blocks](docs/QUIET-MARGIN-DEMO.md). The recording follows a live-mark short through deposit, private open, close, and withdrawal. A separate pool with a controlled mark demonstrates healthy rejection and Keeper B liquidation on both sides.
+## One-minute liquidation walkthrough
 
-Run `node scripts/verify-judge-demo.mjs` from the root with Node.js 22+ and internet access. It checks the recorded transactions without wallet credentials. For the app, use the [Shielded Pool operator guide](docs/SHIELDED-COLLATERAL.md#shielded-pool-with-offline-liquidation).
+Watch **1:45–2:41** of the [demo video](docs/media/quiet-margin-judge-demo.mp4). Follow either column below to compare the rejected liquidation with the accepted liquidation for the **same position commitment**. The recorded liquidation runs use controlled prices in a separate testnet pool running the same contract code as the live demo.
 
-The rest of this guide documents the original funded-market run and its supporting replay. It uses a different market design and different receipts from the current Shielded Pool.
+| Step | What to check | Long | Short |
+| --- | --- | --- | --- |
+| 1. Open a shielded position | The public call carries the entry mark, commitments, and proof. The trader can see direction, exact size, and margin in the app; those terms are absent from the public open arguments in plaintext. | [Open](https://testnet.near.rocks/tx/3gVEWDridZMcUBgxEtfAp8YHnd1wV695vBSCJ9rSYstR) | [Open](https://testnet.near.rocks/tx/GPwm7b3UG9wKtHAer22RU6Pe5gEgukZnUPEa6cHg9NQV) |
+| 2. Try to liquidate at the healthy mark | The submitted proof is built for the adverse price. The contract verifies against its own $68,800 mark and rejects the call with `ERR_PROOF_INVALID`. | [Rejected call](https://testnet.near.rocks/tx/D1hgei3NKNQ6PRnuFcHKsRE7GF62Yedqq5FRGQ4vkmMe) | [Rejected call](https://testnet.near.rocks/tx/9uhkxSao7pi6AmfBnLyyzreYT5pks6nkyJXo9FEjaUPE) |
+| 3. Move the mark against the position | The controlled publisher moves BTC to $40,000 for the long and $96,000 for the short. | [Mark update](https://testnet.near.rocks/tx/9odGXYP2vVAkobyQujAqZVBf886opiGRMZg34wQ2DcUR) | [Mark update](https://testnet.near.rocks/tx/Dm1n6dRNm3QVk48X8g3uahzjUZfWJt9j19MHazGHLDMm) |
+| 4. Settle through the backup keeper | For each side, compare the position commitment in steps 2 and 4. The accepted call emits `position_liquidated` with `keeper-b.qm-treasury-a280bef3.testnet` as the transaction signer. | [Accepted call](https://testnet.near.rocks/tx/6bQcmpib6JQYXakzmdotbWkm2Eh9ZWMZ1To7zs5Gsoh3) | [Accepted call](https://testnet.near.rocks/tx/Cg3PtAXJx1PUwLaq6GfzUgYANu5LjtWzFZTHL3Ujv4K8) |
+
+The receipts show Keeper B's signer and the contract outcomes. The video shows both trading sessions closing. The [test runner](scripts/testnet-pool-liquidation.mjs) performs the liquidation phase without either trader's key or Keeper A's key. Both designated keepers can decrypt a copy of the position terms to generate liquidation proofs. Public maker accounting, funding, and timing can still reveal information about the trade. See the [privacy limits](README.md#privacy-and-operating-limits) and [full transaction and block evidence](docs/QUIET-MARGIN-DEMO.md).
+
+Run the read-only verification from the repository root with Node.js 22+ and internet access. It needs no wallet or package installation.
+
+```sh
+node scripts/verify-judge-demo.mjs
+```
+
+Expect two `PASS` lines covering all 16 finalized transactions and their inclusion blocks. For a live deposit, open, close, and withdrawal, use the [hosted trade walkthrough](docs/HOSTED-JUDGE-WALKTHROUGH.md). See the [archival RPC note](README.md#historical-testnet-rpc) for the historical receipt lookup.
+
+## Earlier funded-market prototype
+
+The rest of this guide documents the original funded-market design, replay, and Sandbox run. It uses separate receipts from the current shielded pool above.
 
 ### Public testnet explorer
 
@@ -136,10 +155,11 @@ PASS keeper_payout          market holds 140100 mUSDC cents
 96 passed, 0 failed, 0 skipped
 ```
 
-Historical views fall back to the FastNEAR archival endpoint. If both
-endpoints report the old block as unavailable, that check prints `SKIP`. Any
-other error fails. A complete check has 0 skipped; `--strict` makes skips
-fail too.
+The verifier starts with FastNEAR's archival endpoint and can use NEAR's
+archival endpoint if a read is rate limited. It also falls back to FastNEAR's
+regular testnet endpoint. If the archival and regular lookups both report an
+old block as unavailable, that check prints `SKIP`. Any other error fails.
+With `--strict`, a complete check requires zero skips.
 
 ## 3. Reproduce from source in NEAR Sandbox
 

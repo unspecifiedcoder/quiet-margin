@@ -11,6 +11,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
+import { retryRateLimit, TESTNET_ARCHIVAL_FALLBACK } from './retry-rate-limit.mjs';
 
 const manifest = JSON.parse(readFileSync(new URL('../demo/receipts.json', import.meta.url), 'utf8'));
 const { network, accounts, market } = manifest;
@@ -32,11 +33,13 @@ async function rpcOnce(url, method, params) {
     body: JSON.stringify({ jsonrpc: '2.0', id: 'verify', method, params }),
     signal: AbortSignal.timeout(30_000),
   });
-  if (!response.ok) throw new Error(`${url} returned HTTP ${response.status}`);
+  if (!response.ok) {
+    throw Object.assign(new Error(`${url} returned HTTP ${response.status}`), { status: response.status });
+  }
   const body = await response.json();
   if (body.error) {
     const code = body.error.cause?.name ?? body.error.name;
-    throw Object.assign(new Error(code ?? JSON.stringify(body.error)), { code });
+    throw Object.assign(new Error(code ?? JSON.stringify(body.error)), { code, data: body.error });
   }
   return body.result;
 }
@@ -44,15 +47,18 @@ async function rpcOnce(url, method, params) {
 // NEAR RPC error causes that mean the node no longer serves the requested block.
 const UNAVAILABLE = new Set(['UNKNOWN_BLOCK', 'GARBAGE_COLLECTED_BLOCK', 'UNAVAILABLE_SHARD']);
 
-// Try the regular RPC, then the archival RPC for old transactions and blocks.
+// Most reads are historical, so use the archival RPC before the regular RPC.
 async function rpc(method, params) {
   try {
-    return await rpcOnce(network.rpc, method, params);
+    return await retryRateLimit(
+      () => rpcOnce(network.archival_rpc, method, params),
+      () => rpcOnce(TESTNET_ARCHIVAL_FALLBACK, method, params),
+    );
   } catch (first) {
     try {
-      return await rpcOnce(network.archival_rpc, method, params);
+      return await retryRateLimit(() => rpcOnce(network.rpc, method, params));
     } catch (second) {
-      throw Object.assign(new Error(`${first.message}; archival: ${second.message}`),
+      throw Object.assign(new Error(`archival: ${first.message}; regular: ${second.message}`),
         { unavailable: UNAVAILABLE.has(first.code) && UNAVAILABLE.has(second.code) });
     }
   }

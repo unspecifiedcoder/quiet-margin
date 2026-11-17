@@ -1,15 +1,18 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { Rpc } from '../exchange/src/protocol/rpc.js';
+import { retryRateLimit, TESTNET_ARCHIVAL_FALLBACK } from './retry-rate-limit.mjs';
 
 const receipts = JSON.parse(await readFile(new URL('../docs/quiet-margin-demo-receipts.json', import.meta.url), 'utf8'));
 // Both the transaction and its inclusion block are historical testnet reads.
 const rpc = new Rpc('https://archival-rpc.testnet.fastnear.com');
+const backupRpc = new Rpc(TESTNET_ARCHIVAL_FALLBACK);
+const readHistorical = (read) => retryRateLimit(() => read(rpc), () => read(backupRpc));
 
 async function verify(row) {
   const [tx, block] = await Promise.all([
-    rpc.txFinal(row.hash, row.signer),
-    rpc.call('block', { block_id: row.block }),
+    readHistorical((client) => client.txFinal(row.hash, row.signer)),
+    readHistorical((client) => client.call('block', { block_id: row.block })),
   ]);
   assert.equal(tx.final_execution_status, 'FINAL');
   assert.equal(tx.transaction.hash, row.hash);
@@ -36,14 +39,12 @@ async function verify(row) {
 }
 
 const records = new Map();
-for (let i = 0; i < receipts.length; i += 4) {
-  await Promise.all(receipts.slice(i, i + 4).map(async (row) => {
-    try {
-      records.set(row.id, await verify(row));
-    } catch (error) {
-      throw new Error('Verification failed for ' + row.label, { cause: error });
-    }
-  }));
+for (const row of receipts) {
+  try {
+    records.set(row.id, await verify(row));
+  } catch (error) {
+    throw new Error('Verification failed for ' + row.label, { cause: error });
+  }
 }
 assert.equal(records.size, 16);
 const [fund, deposit, mark, open, close, exit] = ['fund', 'deposit', 'mark', 'open', 'close', 'withdraw']

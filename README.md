@@ -6,7 +6,7 @@ The browser generates Groth16 proofs for trader actions. The NEAR contract verif
 
 ## Start here
 
-**[Watch the 2:41 demo](docs/media/quiet-margin-judge-demo.mp4)** · [English captions](docs/media/quiet-margin-judge-demo.srt) · [All 16 transactions and blocks](docs/QUIET-MARGIN-DEMO.md)
+**[Watch the 2:41 demo](docs/media/quiet-margin-judge-demo.mp4)** · **[One-minute liquidation walkthrough](JUDGES.md#one-minute-liquidation-walkthrough)** · [English captions](docs/media/quiet-margin-judge-demo.srt) · [All 16 transactions and blocks](docs/QUIET-MARGIN-DEMO.md)
 
 | In the video | What to check |
 | --- | --- |
@@ -69,4 +69,4 @@ Libraries and tools include NEAR SDK, near-workspaces, Arkworks, wasm-bindgen, N
 
 ## Historical testnet RPC
 
-After the submission deadline, the regular FastNEAR testnet RPC returned `UNKNOWN_BLOCK` for a recorded inclusion block. The read-only verifier uses FastNEAR's archival endpoint, `https://archival-rpc.testnet.fastnear.com`, to retrieve the historical transactions and blocks. The same command passed all 16 checks against the existing receipts. This maintenance patch changes the verifier's endpoint and documents the lookup.
+After the submission deadline, the regular FastNEAR testnet RPC returned `UNKNOWN_BLOCK` for a recorded inclusion block. The read-only verifier uses FastNEAR's archival endpoint, `https://archival-rpc.testnet.fastnear.com`, to retrieve the historical transactions and blocks. If FastNEAR rate limits a read, the verifier can retry and use `https://archival-rpc.testnet.near.org` as a fallback. The command checks the same 16 recorded transactions and blocks.
